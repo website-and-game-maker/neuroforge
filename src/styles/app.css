@@ -356,8 +356,8 @@ select {
   gap: 4px;
 }
 .chip-btn {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   border-radius: 6px;
@@ -596,6 +596,7 @@ select {
   box-shadow: 0 8px 26px var(--glow-signal);
   opacity: 0;
   transition: opacity 0.35s, transform 0.35s;
+  pointer-events: none;
   z-index: 3;
 }
 .solved-flag.show {

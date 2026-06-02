@@ -214,7 +214,7 @@ export class App {
         on: {
           change: (e) => {
             this.config.batchSize = Number((e.target as HTMLSelectElement).value);
-            this.rebuildEngine();
+            this.rebuildEngine(false); // batch size only affects the trainer
           },
         },
       },
@@ -304,7 +304,7 @@ export class App {
           const v = Number((e.target as HTMLInputElement).value);
           this.config[key] = v;
           valueEl.textContent = fmt(v);
-          this.rebuildEngine();
+          this.rebuildEngine(false); // keep weights; only the optimizer changes
         },
       },
     });
@@ -463,14 +463,22 @@ export class App {
     return { kind: 'classification', name: 'Your points', inDim: 2, X, Y };
   }
 
-  private rebuildEngine(): void {
+  /**
+   * (Re)build the network and trainer. `resetWeights` controls whether the network is
+   * re-initialised: structural changes (architecture, activation, dataset, mode) reset
+   * the weights, while hyperparameter tweaks (lr, momentum, L2, batch) keep the
+   * learned weights and only swap in a fresh trainer/optimizer.
+   */
+  private rebuildEngine(resetWeights = true): void {
     const inDim = this.task === 'classification' ? 2 : 1;
-    const outAct = this.task === 'classification' ? Sigmoid : Identity;
+    if (resetWeights || !this.net) {
+      const outAct = this.task === 'classification' ? Sigmoid : Identity;
+      const act = activationByName(this.config.activation);
+      this.net = mlp(inDim, this.config.hidden, 1, act, outAct, new Rng(this.weightSeed));
+    }
     this.loss = this.task === 'classification' ? BCE : MSE;
-    const act = activationByName(this.config.activation);
-    this.net = mlp(inDim, this.config.hidden, 1, act, outAct, new Rng(this.weightSeed));
 
-    if (this.trainData.X.rows > 0) {
+    if (this.trainData.X.rows > 0 && this.net) {
       this.trainer = new Trainer(
         this.net,
         this.loss,
@@ -489,7 +497,7 @@ export class App {
     }
     this.hideSolved();
     this.redrawArena();
-    this.updateMetrics();
+    this.refreshTelemetry();
     this.redrawDiagram();
   }
 
@@ -504,7 +512,6 @@ export class App {
     if (!this.trainer) return;
     this.trainer.step(40);
     this.redrawAll();
-    this.checkCompletion();
   }
 
   private resetWeights(): void {
@@ -535,16 +542,15 @@ export class App {
       this.trainer.step(STEPS_PER_FRAME);
       this.frame++;
       this.redrawArena();
-      this.updateMetrics();
+      this.refreshTelemetry();
       if (this.frame % 6 === 0) this.redrawDiagram();
-      this.checkCompletion();
     }
     requestAnimationFrame(() => this.loop());
   }
 
   private redrawAll(): void {
     this.redrawArena();
-    this.updateMetrics();
+    this.refreshTelemetry();
     this.redrawDiagram();
   }
 
@@ -578,43 +584,65 @@ export class App {
     ctx.stroke();
   }
 
-  private updateMetrics(): void {
+  /**
+   * Update all telemetry from a single evaluation pass: the step counter, loss
+   * readout + trace, the primary/secondary metric tiles, and — in challenge mode —
+   * completion detection (persisted once, on first solve).
+   */
+  private refreshTelemetry(): void {
     const steps = this.trainer?.stepCount ?? 0;
     this.refs.statSteps.textContent = steps.toLocaleString();
     const lossHist = this.trainer?.lossHistory ?? [];
     const lastLoss = lossHist.length ? lossHist[lossHist.length - 1]! : NaN;
     this.refs.statLoss.textContent = Number.isFinite(lastLoss) ? lastLoss.toFixed(4) : '—';
 
-    const { lossCanvas } = this.refs;
-    const lc = fitCanvas(lossCanvas);
+    const lc = fitCanvas(this.refs.lossCanvas);
     drawLossChart(lc.ctx, lossHist, lc.w, lc.h);
 
     if (!this.net || this.trainData.X.rows === 0) {
       this.refs.statPrimary.value.textContent = '—';
       this.refs.statSecondary.value.textContent = '—';
+      this.refs.statPrimary.value.classList.remove('good');
       return;
     }
 
+    const target = this.currentTarget();
+    let testMetric: number;
+    let passed = false;
     if (this.task === 'classification') {
-      const testAcc = accuracy(this.net.forward(this.testData.X), this.testData.Y);
+      testMetric = accuracy(this.net.forward(this.testData.X), this.testData.Y);
       const trainAcc = accuracy(this.net.forward(this.trainData.X), this.trainData.Y);
-      this.refs.statPrimary.value.textContent = `${(testAcc * 100).toFixed(1)}%`;
+      this.refs.statPrimary.value.textContent = `${(testMetric * 100).toFixed(1)}%`;
       this.refs.statSecondary.value.textContent = `${(trainAcc * 100).toFixed(1)}%`;
-      const target = this.currentTarget();
-      this.refs.statPrimary.value.classList.toggle(
-        'good',
-        target?.kind === 'accuracy' ? testAcc >= target.min : false,
-      );
+      passed = target?.kind === 'accuracy' ? testMetric >= target.min : false;
     } else {
-      const testMse = mseMetric(this.net.forward(this.testData.X), this.testData.Y);
+      testMetric = mseMetric(this.net.forward(this.testData.X), this.testData.Y);
       const trainMse = mseMetric(this.net.forward(this.trainData.X), this.trainData.Y);
-      this.refs.statPrimary.value.textContent = testMse.toFixed(4);
+      this.refs.statPrimary.value.textContent = testMetric.toFixed(4);
       this.refs.statSecondary.value.textContent = trainMse.toFixed(4);
-      const target = this.currentTarget();
-      this.refs.statPrimary.value.classList.toggle(
-        'good',
-        target?.kind === 'mse' ? testMse <= target.max : false,
-      );
+      passed = target?.kind === 'mse' ? testMetric <= target.max : false;
+    }
+    this.refs.statPrimary.value.classList.toggle('good', passed);
+
+    if (this.mode === 'challenge' && target) this.handleCompletion(passed, target, testMetric);
+  }
+
+  private handleCompletion(
+    passed: boolean,
+    target: NonNullable<ReturnType<App['currentTarget']>>,
+    testMetric: number,
+  ): void {
+    const ch = CHALLENGES[this.challengeIndex]!;
+    if (!passed) {
+      this.hideSolved();
+      return;
+    }
+    this.showSolved();
+    if (!isCompleted(this.progress, ch.id)) {
+      const score = target.kind === 'accuracy' ? testMetric : Math.max(0, 1 - testMetric);
+      this.progress = markComplete(this.progress, ch.id, score);
+      saveProgress(this.progress);
+      this.refreshChallengeList();
     }
   }
 
@@ -627,35 +655,6 @@ export class App {
   // ----- Challenge progression -------------------------------------------
   private currentTarget(): Challenge['target'] | null {
     return this.mode === 'challenge' ? CHALLENGES[this.challengeIndex]!.target : null;
-  }
-
-  private checkCompletion(): void {
-    if (this.mode !== 'challenge' || !this.net) return;
-    const ch = CHALLENGES[this.challengeIndex]!;
-    let passed = false;
-    let score = 0;
-    if (ch.target.kind === 'accuracy') {
-      const acc = accuracy(this.net.forward(this.testData.X), this.testData.Y);
-      passed = acc >= ch.target.min;
-      score = acc;
-    } else {
-      const mse = mseMetric(this.net.forward(this.testData.X), this.testData.Y);
-      passed = mse <= ch.target.max;
-      score = Math.max(0, 1 - mse);
-    }
-    if (passed) {
-      this.showSolved();
-      if (!isCompleted(this.progress, ch.id)) {
-        this.progress = markComplete(this.progress, ch.id, score);
-        saveProgress(this.progress);
-        this.refreshChallengeList();
-      } else {
-        this.progress = markComplete(this.progress, ch.id, score);
-        saveProgress(this.progress);
-      }
-    } else {
-      this.hideSolved();
-    }
   }
 
   private showSolved(): void {
@@ -945,7 +944,7 @@ export class App {
     const { wx, wy } = screenToWorld(vp, sx, sy);
     this.customPoints.push({ x: wx, y: wy, label: this.drawClass });
     this.rebuildData();
-    this.rebuildEngine();
+    this.rebuildEngine(false); // keep the boundary; let it adapt as points are added
     this.refreshRunButton();
   }
 
