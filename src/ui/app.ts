@@ -633,7 +633,10 @@ export class App {
     testMetric: number,
   ): void {
     const ch = CHALLENGES[this.challengeIndex]!;
-    if (!passed) {
+    // Require at least some training before declaring victory — otherwise a trivially
+    // separable dataset (e.g. Two Blobs) would be "solved" on load by random weights.
+    const trained = (this.trainer?.stepCount ?? 0) > 0;
+    if (!passed || !trained) {
       this.hideSolved();
       return;
     }
