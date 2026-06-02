@@ -1,0 +1,147 @@
+/* ============================================================================
+   NeuroForge — design tokens + base, "laboratory oscilloscope" theme.
+   ========================================================================= */
+
+:root {
+  /* Surfaces — deep ink graded into raised panels */
+  --bg: #0a0e16;
+  --bg-1: #0c111c;
+  --bg-2: #0e1422;
+  --bg-3: #121a2b;
+  --bg-4: #18223a;
+
+  /* Ink */
+  --ink: #e7edf8;
+  --ink-dim: #a4b4d2;
+  --ink-faint: #6b7c9c;
+
+  /* Lines / hairlines */
+  --line: rgba(150, 170, 215, 0.12);
+  --line-strong: rgba(150, 170, 215, 0.24);
+
+  /* Signal colours (match the engine's viz palette) */
+  --class-a: #5b9cff; /* label 0 — cool */
+  --class-b: #ff7a59; /* label 1 — warm */
+  --signal: #5ce1b0; /* live / phosphor / success */
+  --warn: #ffce6b;
+
+  /* Glows */
+  --glow-a: rgba(91, 156, 255, 0.35);
+  --glow-signal: rgba(92, 225, 176, 0.35);
+
+  /* Spacing scale (8px base) */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  /* Radii */
+  --r1: 8px;
+  --r2: 12px;
+  --r3: 18px;
+
+  /* Shadows */
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.35);
+
+  /* Type */
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --maxw: 1500px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background-color: var(--bg);
+  /* Layered atmosphere: a soft top glow, a deep vignette, and a faint instrument grid. */
+  background-image:
+    radial-gradient(1200px 600px at 18% -8%, rgba(91, 156, 255, 0.08), transparent 60%),
+    radial-gradient(1000px 700px at 100% 0%, rgba(255, 122, 89, 0.06), transparent 55%),
+    radial-gradient(1400px 900px at 50% 120%, rgba(92, 225, 176, 0.05), transparent 60%),
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    44px 44px,
+    44px 44px;
+  background-attachment: fixed;
+  background-position: center;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  line-height: 1.55;
+  min-height: 100vh;
+}
+
+/* The instrument grid is faint; fade it under content with a subtle overlay. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(1100px 800px at 50% 35%, transparent 40%, rgba(10, 14, 22, 0.55) 100%);
+  z-index: 0;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-optical-sizing: auto;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+a {
+  color: var(--class-a);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The eyebrow/label style used above section headers */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Reduced motion: kill the entrance animations. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

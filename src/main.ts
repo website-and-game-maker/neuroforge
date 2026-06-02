@@ -1,5 +1,9 @@
-// Entry point. Replaced with the real application shell during implementation.
-const app = document.querySelector<HTMLDivElement>('#app');
-if (app) {
-  app.textContent = 'NeuroForge is warming up…';
+import './styles/theme.css';
+import './styles/app.css';
+import { App } from './ui/app';
+
+const root = document.querySelector<HTMLDivElement>('#app');
+if (root) {
+  root.className = 'app';
+  new App().mount(root);
 }
