@@ -26,6 +26,12 @@ function gatherRows(m: Matrix, idx: number[]): Matrix {
  * `step(k)` once per animation frame so the page never blocks. An epoch's worth of
  * shuffled indices is consumed batch by batch, reshuffling when exhausted.
  */
+/** Cap the retained loss history so a long training run can't grow memory without bound
+ *  (the chart only ever needs a recent window). Trimming is deterministic, so identical
+ *  seeds still produce identical histories. */
+const MAX_LOSS_HISTORY = 5000;
+const LOSS_HISTORY_KEEP = 4000;
+
 export class Trainer {
   readonly lossHistory: number[] = [];
   stepCount = 0;
@@ -59,6 +65,9 @@ export class Trainer {
       this.net.backward(this.loss.backward(out, by));
       this.opt.step(this.net.params());
       this.lossHistory.push(l);
+      if (this.lossHistory.length > MAX_LOSS_HISTORY) {
+        this.lossHistory.splice(0, this.lossHistory.length - LOSS_HISTORY_KEEP);
+      }
       this.stepCount++;
     }
   }

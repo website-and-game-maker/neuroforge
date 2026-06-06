@@ -13,6 +13,24 @@ export class Network {
     return a;
   }
 
+  /**
+   * Forward pass that also returns the value of every *neuron column* along the way:
+   * `columns[0]` is the input, and each subsequent entry is the post-activation output
+   * of one hidden block (Dense → activation) ending with the network output. The widths
+   * therefore match the network diagram's node columns: `[inDim, ...hidden, outDim]`.
+   *
+   * Used by the live inspector to show a single probe point flowing through the net.
+   */
+  forwardVerbose(x: Matrix): { columns: Matrix[] } {
+    const columns: Matrix[] = [x];
+    let a = x;
+    for (const layer of this.layers) {
+      a = layer.forward(a);
+      if (layer instanceof ActivationLayer) columns.push(a);
+    }
+    return { columns };
+  }
+
   backward(dOut: Matrix): Matrix {
     let g = dOut;
     for (let i = this.layers.length - 1; i >= 0; i--) {

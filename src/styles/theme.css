@@ -13,7 +13,8 @@
   /* Ink */
   --ink: #e7edf8;
   --ink-dim: #a4b4d2;
-  --ink-faint: #6b7c9c;
+  /* Lifted to clear WCAG AA (~4.5:1) on the dark panels, since it labels small text. */
+  --ink-faint: #8694b0;
 
   /* Lines / hairlines */
   --line: rgba(150, 170, 215, 0.12);
@@ -133,9 +134,10 @@ a {
 }
 
 :focus-visible {
+  /* Outline + offset only — never mutate the element's own radius, or pill/circle
+     controls (tabs, dots, icon buttons) get squared off on keyboard focus. */
   outline: 2px solid var(--signal);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 /* Reduced motion: kill the entrance animations. */

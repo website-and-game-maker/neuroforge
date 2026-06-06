@@ -113,9 +113,16 @@
   margin: 0 auto;
   padding: var(--s6);
   display: grid;
-  grid-template-columns: 332px minmax(0, 1fr) 348px;
+  grid-template-columns: 366px minmax(0, 1fr) 376px;
   gap: var(--s5);
   align-items: start;
+}
+.left-panel {
+  position: sticky;
+  top: var(--s4);
+  max-height: calc(100vh - var(--s6));
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 /* ---- Panels ------------------------------------------------------------- */
@@ -292,6 +299,19 @@ select {
   color: #2a1407;
   background: var(--warn);
   box-shadow: 0 0 22px rgba(255, 206, 107, 0.3);
+}
+/* Secondary actions (Step / Reset / New data / Prev / Clear) — quieter than primary. */
+.btn.ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink-dim);
+  box-shadow: none;
+  flex: 0 1 auto;
+}
+.btn.ghost:hover {
+  background: var(--bg-2);
+  color: var(--ink);
+  border-color: var(--line-strong);
 }
 .btn:disabled {
   opacity: 0.4;
@@ -767,4 +787,240 @@ select {
   .brand-title {
     font-size: 22px;
   }
+}
+
+/* ============================================================================
+   v2 — Learn, Coach, Inspector, Versus, Tutorial, modals.
+   ========================================================================= */
+
+/* ---- Icon buttons / ghost segment --------------------------------------- */
+.icon-btn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-dim);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  min-width: 38px;
+  height: 38px;
+  padding: 0 12px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: color 0.18s, border-color 0.18s, background 0.18s;
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+.ghost-seg { background: transparent; border-color: transparent; padding: 0; gap: var(--s2); }
+
+/* The mode segment now holds four tabs — keep them compact. */
+[data-tour='modes'] .seg-btn { padding: 9px 14px; }
+
+/* ---- Controls block ----------------------------------------------------- */
+.controls-block { display: flex; flex-direction: column; gap: var(--s5); }
+.controls-block .group + .group { margin-top: var(--s4); }
+
+/* ---- Architecture: per-layer slider + budget ---------------------------- */
+.layer-chip { min-width: 92px; }
+.chip-range { width: 72px; height: 22px; }
+.chip-range::-webkit-slider-thumb { width: 14px; height: 14px; margin-top: -5px; }
+.chip-controls { gap: 6px; }
+.chip-remove { font-size: 13px; }
+
+.budget { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s1); }
+.budget-row {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.budget-n { color: var(--ink); }
+.budget-n.over { color: var(--class-b); }
+.budget-track { height: 6px; border-radius: 999px; background: var(--bg-1); border: 1px solid var(--line); overflow: hidden; }
+.budget-fill { height: 100%; background: linear-gradient(90deg, var(--signal), #4fc3ff); transition: width 0.25s; }
+.budget-fill.over { background: var(--class-b); }
+
+.class-seg { width: 100%; }
+.class-seg .seg-btn { flex: 1; }
+.class-seg .seg-btn:first-child { color: var(--class-a); }
+.class-seg .seg-btn:last-child { color: var(--class-b); }
+.class-seg .seg-btn.active { color: #06231a; }
+
+.reset-progress {
+  align-self: flex-start; margin-top: var(--s2);
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+  background: none; border: 0; color: var(--ink-faint); cursor: pointer;
+}
+.reset-progress:hover { color: var(--class-b); }
+
+/* ---- Learn: lesson card ------------------------------------------------- */
+.lesson-card {
+  display: flex; flex-direction: column; gap: var(--s3);
+  padding: var(--s4);
+  border-radius: var(--r2);
+  background: linear-gradient(180deg, rgba(92, 225, 176, 0.06), rgba(92, 225, 176, 0.015));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--signal);
+}
+.lesson-dots { display: flex; gap: 7px; }
+.ldot {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--bg-1); border: 1px solid var(--line-strong); cursor: pointer; padding: 0;
+  transition: transform 0.12s, background 0.18s, border-color 0.18s;
+}
+.ldot:hover { transform: scale(1.18); border-color: var(--ink-faint); }
+.ldot.done { background: rgba(92, 225, 176, 0.5); border-color: transparent; }
+.ldot.active { background: var(--signal); border-color: transparent; box-shadow: 0 0 0 3px rgba(92, 225, 176, 0.18); }
+.lesson-eyebrow {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--signal);
+}
+.lesson-title { font-size: 19px; }
+.lesson-idea { font-size: 13.5px; color: var(--ink); font-weight: 600; line-height: 1.5; }
+.lesson-body { display: flex; flex-direction: column; gap: var(--s2); }
+.lesson-p { font-size: 13px; color: var(--ink-dim); line-height: 1.6; margin: 0; }
+.lesson-do {
+  display: flex; gap: var(--s3); align-items: flex-start;
+  padding: var(--s3); border-radius: var(--r1);
+  background: rgba(255, 206, 107, 0.07); border: 1px solid rgba(255, 206, 107, 0.25);
+}
+.lesson-do-tag {
+  flex: none; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--warn); padding: 3px 8px; border-radius: 6px; background: rgba(255, 206, 107, 0.12); margin-top: 1px;
+}
+.lesson-do-txt { font-size: 13px; color: var(--ink); line-height: 1.55; }
+.lesson-nav { display: flex; gap: var(--s3); margin-top: var(--s1); }
+.lesson-nav .btn { flex: 1; }
+
+/* ---- Coach -------------------------------------------------------------- */
+.coach {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: var(--s4); border-radius: var(--r2);
+  background: var(--bg-1); border: 1px solid var(--line); border-left: 3px solid var(--ink-faint);
+  transition: border-color 0.25s, background 0.25s;
+}
+.coach-head { display: flex; align-items: center; gap: var(--s2); }
+.coach-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-faint); flex: none; }
+.coach-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+.coach-body { font-size: 13px; color: var(--ink-dim); line-height: 1.55; }
+.coach.tone-info { border-left-color: var(--class-a); background: linear-gradient(180deg, rgba(91,156,255,0.06), transparent); }
+.coach.tone-info .coach-dot { background: var(--class-a); box-shadow: 0 0 8px var(--glow-a); }
+.coach.tone-warn { border-left-color: var(--warn); background: linear-gradient(180deg, rgba(255,206,107,0.07), transparent); }
+.coach.tone-warn .coach-dot { background: var(--warn); box-shadow: 0 0 8px rgba(255,206,107,0.5); }
+.coach.tone-good, .coach.tone-success { border-left-color: var(--signal); background: linear-gradient(180deg, rgba(92,225,176,0.08), transparent); }
+.coach.tone-good .coach-dot, .coach.tone-success .coach-dot { background: var(--signal); box-shadow: 0 0 10px var(--glow-signal); animation: pulse 1.4s infinite; }
+
+/* ---- IO explainer + inspector caption ----------------------------------- */
+.io-box {
+  padding: var(--s3) var(--s4); border-radius: var(--r2);
+  background: var(--bg-1); border: 1px solid var(--line);
+}
+.io-title {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-faint); margin-bottom: var(--s2);
+}
+.io-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 5px; }
+.io-list li { font-size: 12.5px; color: var(--ink-dim); line-height: 1.5; }
+
+.canvas-frame.inspector { height: 252px; }
+.inspector-caption {
+  font-size: 12px; color: var(--ink-dim); line-height: 1.5;
+  padding: var(--s2) var(--s1); min-height: 34px;
+}
+.inspector-caption strong { color: var(--ink); }
+.inl-code {
+  font-family: var(--font-mono); font-size: 0.92em; padding: 1px 5px; border-radius: 5px;
+  background: var(--bg-1); border: 1px solid var(--line); color: var(--signal);
+}
+
+/* ---- Misc small notes / rules ------------------------------------------- */
+.mini-note { font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; }
+.mini-note strong { color: var(--ink); }
+.rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-top: var(--s2); }
+.rule {
+  display: flex; justify-content: space-between; gap: var(--s2);
+  padding: var(--s2) var(--s3); border-radius: var(--r1); background: var(--bg-1); border: 1px solid var(--line);
+}
+.rule-l { font-size: 11px; color: var(--ink-faint); }
+.rule-v { font-family: var(--font-mono); font-size: 13px; color: var(--ink); }
+
+/* ---- Versus HUD + meter ------------------------------------------------- */
+.vs-hud { display: none; }
+.vs-hud.show { display: block; }
+.vs-meter { display: flex; flex-direction: column; gap: 7px; padding: var(--s3) var(--s4); border-radius: var(--r2); background: var(--bg-1); border: 1px solid var(--line); }
+.vs-meter-head { display: flex; align-items: baseline; justify-content: space-between; }
+.vs-side { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.vs-side.trainer { color: var(--signal); }
+.vs-side.saboteur { color: var(--class-b); }
+.vs-acc { font-family: var(--font-mono); font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.vs-track { position: relative; height: 12px; border-radius: 999px; overflow: hidden; background: linear-gradient(90deg, rgba(255,122,89,0.25), rgba(255,122,89,0.12)); border: 1px solid var(--line); }
+.vs-fill { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(92,225,176,0.55), var(--signal)); transition: width 0.3s ease; }
+.vs-threshold { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.vs-rounds { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; color: var(--ink-faint); text-align: center; }
+
+.turn-banner {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.05em;
+  padding: var(--s3) var(--s4); border-radius: var(--r1); border: 1px solid var(--line); color: var(--ink);
+}
+.turn-banner.trainer { background: rgba(92,225,176,0.1); border-color: rgba(92,225,176,0.3); }
+.turn-banner.saboteur { background: rgba(255,122,89,0.1); border-color: rgba(255,122,89,0.3); }
+.vs-budget { font-family: var(--font-mono); font-size: 13px; color: var(--ink-dim); text-align: center; }
+.btn.wide, .btn.primary.wide { flex-basis: 100%; width: 100%; }
+
+.vs-result { display: flex; flex-direction: column; gap: 6px; padding: var(--s5) var(--s4); border-radius: var(--r2); text-align: center; }
+.vs-result.trainer { background: linear-gradient(180deg, rgba(92,225,176,0.14), transparent); border: 1px solid rgba(92,225,176,0.35); }
+.vs-result.saboteur { background: linear-gradient(180deg, rgba(255,122,89,0.14), transparent); border: 1px solid rgba(255,122,89,0.35); }
+.vs-result-tag { font-family: var(--font-display); font-size: 24px; font-weight: 700; }
+.vs-result.trainer .vs-result-tag { color: var(--signal); }
+.vs-result.saboteur .vs-result-tag { color: var(--class-b); }
+.vs-result-acc { font-family: var(--font-mono); font-size: 14px; color: var(--ink-dim); }
+
+/* ---- Modal (concepts) --------------------------------------------------- */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  background: rgba(6, 9, 16, 0.7); backdrop-filter: blur(4px); padding: var(--s5);
+  animation: fade 0.2s both;
+}
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  width: min(760px, 100%); max-height: 84vh; overflow-y: auto;
+  background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: var(--r3);
+  box-shadow: var(--shadow); padding: var(--s5);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s4); }
+.concept-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s3); }
+.concept { padding: var(--s3) var(--s4); border-radius: var(--r2); background: var(--bg-1); border: 1px solid var(--line); }
+.concept-term { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+.concept-short { font-size: 12.5px; color: var(--signal); margin: 2px 0 6px; }
+.concept-long { font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; }
+
+/* ---- Tutorial overlay --------------------------------------------------- */
+.tut-overlay { position: fixed; inset: 0; z-index: 60; }
+.tut-spotlight {
+  position: fixed; border-radius: 14px; pointer-events: none;
+  box-shadow: 0 0 0 4px rgba(92, 225, 176, 0.5), 0 0 0 9999px rgba(6, 9, 16, 0.72);
+  transition: left 0.28s, top 0.28s, width 0.28s, height 0.28s;
+}
+.tut-card {
+  position: fixed; width: min(320px, calc(100vw - 24px));
+  background: var(--bg-3); border: 1px solid var(--line-strong); border-radius: var(--r2);
+  box-shadow: var(--shadow); padding: var(--s4); z-index: 61;
+  transition: left 0.2s, top 0.2s;
+}
+.tut-eyebrow { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--signal); }
+.tut-title { font-size: 18px; margin: 4px 0 8px; }
+.tut-body { font-size: 13px; color: var(--ink-dim); line-height: 1.6; }
+.tut-body strong { color: var(--ink); }
+.tut-actions { display: flex; align-items: center; justify-content: space-between; margin-top: var(--s4); gap: var(--s3); }
+.tut-skip { background: none; border: 0; color: var(--ink-faint); font-size: 12px; cursor: pointer; }
+.tut-skip:hover { color: var(--ink-dim); }
+.tut-nav { display: flex; gap: var(--s2); }
+.tut-btn { flex: 0 0 auto; padding: 9px 16px; min-height: 0; }
+
+/* ---- Responsive: stack the panels on narrow screens --------------------- */
+@media (max-width: 1180px) {
+  .left-panel { position: static; max-height: none; overflow: visible; }
+}
+/* Let the 4-tab mode switcher shrink instead of forcing horizontal scroll on phones. */
+@media (max-width: 620px) {
+  .topbar-actions { width: 100%; }
+  [data-tour='modes'] { display: flex; width: 100%; }
+  [data-tour='modes'] .seg-btn { flex: 1 1 0; min-width: 0; padding: 9px 6px; font-size: 11px; letter-spacing: 0.04em; }
 }
