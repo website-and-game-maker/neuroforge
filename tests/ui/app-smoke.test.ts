@@ -94,53 +94,83 @@ describe('App integration (jsdom)', () => {
     expect(anyApp.studio.trainer).toBeTruthy();
   });
 
-  it('plays a Versus turn cycle as the human Trainer vs an AI Saboteur', () => {
+  interface VsHandle {
+    vsSetup: { humanRole: string; aiVsAi: boolean; difficulty: string };
+    vs: {
+      match: { points: unknown[]; elapsedMs: number; budgetLeft: number; done: boolean };
+      finished: boolean;
+      winner: string | null;
+      saboClass: number;
+    } | null;
+    placeAt(x: number, y: number): void;
+    vsStart(): void;
+    vsTick(dtMs: number): void;
+  }
+
+  it('plays live as the human Trainer: AI saboteur drips points in while training runs', () => {
     const { app, root } = mountApp();
     clickMode(root, 'Versus');
     expect(root.querySelector('.rules-grid')).toBeTruthy();
 
-    const anyApp = app as never as {
-      vsSetup: { humanRole: string; aiVsAi: boolean; difficulty: string };
-      vs: { match: { phase: string; sabotage: unknown[] } } | null;
-      stepOnce(): void;
-      vsEndTrainerTurn(): void;
-      vsTick(): void;
-    };
+    const anyApp = app as never as VsHandle;
     anyApp.vsSetup.humanRole = 'trainer';
     anyApp.vsSetup.aiVsAi = false;
     clickByText(root, 'Start match');
 
     expect(anyApp.vs).toBeTruthy();
-    expect(anyApp.vs!.match.phase).toBe('trainer');
+    expect(anyApp.vs!.match.points.length).toBe(0); // no base pattern — empty board
 
-    anyApp.stepOnce();
-    anyApp.vsEndTrainerTurn(); // hand off to the AI saboteur
-    expect(anyApp.vs!.match.phase).toBe('saboteur');
-
-    // Let the AI saboteur drop its points and hand back to the trainer.
-    let guard = 0;
-    while (anyApp.vs!.match.phase === 'saboteur' && guard++ < 2000) anyApp.vsTick();
-    expect(anyApp.vs!.match.sabotage.length).toBeGreaterThan(0);
-    expect(anyApp.vs!.match.phase).toBe('trainer');
+    // ~5 seconds of live play: the AI saboteur should have landed several points.
+    for (let i = 0; i < 320; i++) anyApp.vsTick(16);
+    expect(anyApp.vs!.match.points.length).toBeGreaterThan(1);
+    expect(anyApp.vs!.finished).toBe(false);
   });
 
-  it('runs an AI-vs-AI match to completion', () => {
+  it('lets a human Saboteur paint anywhere, any class, while the clock runs', () => {
     const { app, root } = mountApp();
     clickMode(root, 'Versus');
-    const anyApp = app as never as {
-      vsSetup: { aiVsAi: boolean; difficulty: string };
-      vs: { match: { phase: string }; finished: boolean } | null;
-      vsStart(): void;
-      vsTick(): void;
-    };
+    const anyApp = app as never as VsHandle;
+    anyApp.vsSetup.humanRole = 'saboteur';
+    anyApp.vsSetup.aiVsAi = false;
+    clickByText(root, 'Start match');
+
+    anyApp.vsTick(16);
+    anyApp.placeAt(0.5, 0.5);
+    anyApp.vs!.saboClass = 1;
+    anyApp.placeAt(0.51, 0.52); // right next to an opposite-class point — allowed
+    anyApp.placeAt(-0.8, -0.8);
+    expect(anyApp.vs!.match.points.length).toBe(3);
+    expect(anyApp.vs!.match.budgetLeft).toBeLessThan(60);
+  });
+
+  it('runs an AI-vs-AI live match to the final bell and declares a winner', () => {
+    const { app, root } = mountApp();
+    clickMode(root, 'Versus');
+    const anyApp = app as never as VsHandle;
     anyApp.vsSetup.aiVsAi = true;
     anyApp.vsSetup.difficulty = 'easy';
     anyApp.vsStart();
 
     let guard = 0;
     expect(() => {
-      while (anyApp.vs!.match.phase !== 'done' && guard++ < 20000) anyApp.vsTick();
+      // 100ms ticks → a 120s match completes in ~1200 ticks.
+      while (!anyApp.vs!.finished && guard++ < 5000) anyApp.vsTick(100);
     }).not.toThrow();
-    expect(anyApp.vs!.match.phase).toBe('done');
+    expect(anyApp.vs!.finished).toBe(true);
+    expect(anyApp.vs!.match.done).toBe(true);
+    expect(['trainer', 'saboteur']).toContain(anyApp.vs!.winner);
+    expect(anyApp.vs!.match.points.length).toBeGreaterThan(10);
+  });
+
+  it('routes modes to named paths and back', () => {
+    const { root } = mountApp();
+    clickMode(root, 'Sandbox');
+    expect(window.location.pathname.endsWith('/sandbox')).toBe(true);
+    clickMode(root, 'Challenges');
+    expect(window.location.pathname.endsWith('/challenges')).toBe(true);
+    // The brand link routes home (Learn).
+    const brand = root.querySelector('a.brand') as HTMLAnchorElement;
+    brand.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(window.location.pathname.endsWith('/learn')).toBe(true);
   });
 });

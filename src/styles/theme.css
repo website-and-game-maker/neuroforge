@@ -55,6 +55,9 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 
   --maxw: 1500px;
+
+  /* Height the sticky topbar reserves (single-row layout + breathing room). */
+  --topbar-h: 92px;
 }
 
 *,

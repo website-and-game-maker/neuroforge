@@ -6,72 +6,98 @@ import type { StudioConfig } from '../ui/studio';
 
 export type Role = 'trainer' | 'saboteur';
 export type Difficulty = 'easy' | 'medium' | 'hard';
-export type Phase = 'trainer' | 'saboteur' | 'done';
-
-/** A point the saboteur drops onto the arena. `byAi` marks AI-placed points for the UI. */
-export interface SabotagePoint {
-  x: number;
-  y: number;
-  label: number;
-  byAi: boolean;
-}
-
-/** Match rules — fixed per match for fairness; difficulty only tunes the AI's skill. */
-export interface VersusRules {
-  /** How many saboteur attacks; the trainer always gets the last word. */
-  rounds: number;
-  pointsPerRound: number;
-  /** Max total hidden neurons the trainer may field. */
-  neuronBudget: number;
-  /** Accuracy (over all points) at or above which the Trainer wins. */
-  winThreshold: number;
-  /** Step budget for an automated (AI) trainer turn. */
-  aiTrainSteps: number;
-}
-
-export const VERSUS_RULES: VersusRules = {
-  rounds: 5,
-  pointsPerRound: 9,
-  neuronBudget: 18,
-  winThreshold: 0.88,
-  aiTrainSteps: 1600,
-};
-
-/** Base-pattern size for a match (kept modest so sabotage is a meaningful fraction). */
-export const VERSUS_BASE_POINTS = 100;
+export type HintLevel = 0 | 1 | 2 | 3; // 0 = off, 1 = most help, 3 = least
 
 /** Predict P(class B / orange) for a set of [x,y] rows. */
 export type ProbFn = (X: Matrix) => Matrix;
 
+/** A point placed on the arena during a match. `atMs` is match-time of placement. */
+export interface PlacedPoint {
+  x: number;
+  y: number;
+  label: number;
+  byAi: boolean;
+  atMs: number;
+}
+
+/**
+ * Live-match rules. There are no base patterns and no turns: the saboteur paints the
+ * dataset (any class, anywhere, anytime) from a fixed point budget while the trainer
+ * trains continuously under a neuron budget. When the clock runs out, the trainer wins
+ * iff accuracy over every placed point is at or above the threshold.
+ */
+export interface LiveRules {
+  durationMs: number;
+  pointBudget: number;
+  neuronBudget: number;
+  winThreshold: number;
+  /** Fewer than this many points at the end is a forfeit — trainer wins. */
+  minPoints: number;
+}
+
+export const LIVE_RULES: LiveRules = {
+  durationMs: 120_000,
+  pointBudget: 60,
+  neuronBudget: 18,
+  winThreshold: 0.85,
+  minPoints: 12,
+};
+
+/** AI pacing (ms between actions) per difficulty. */
+export const AI_DROP_INTERVAL: Record<Difficulty, number> = {
+  easy: 3000,
+  medium: 2200,
+  hard: 1500,
+};
+export const AI_TUNE_INTERVAL = 6000;
+
 /* ===========================================================================
-   Match state
+   Match state — a clock, a point budget, and a verdict. Time is injected via
+   advance(dt) so the game logic stays deterministic and testable.
    ========================================================================= */
 
-export class VersusMatch {
-  phase: Phase = 'trainer';
-  /** Number of saboteur attacks completed. */
-  attacksDone = 0;
-  readonly sabotage: SabotagePoint[] = [];
+export class LiveMatch {
+  elapsedMs = 0;
+  readonly points: PlacedPoint[] = [];
 
-  constructor(
-    readonly rules: VersusRules,
-    /** Base "true pattern" both sides build on. */
-    readonly base: Dataset,
-  ) {}
+  constructor(readonly rules: LiveRules) {}
 
-  /** Combined dataset: the base pattern plus every sabotage point placed so far. */
+  get done(): boolean {
+    return this.elapsedMs >= this.rules.durationMs;
+  }
+
+  get remainingMs(): number {
+    return Math.max(0, this.rules.durationMs - this.elapsedMs);
+  }
+
+  get budgetLeft(): number {
+    return Math.max(0, this.rules.pointBudget - this.points.length);
+  }
+
+  /** Advance the match clock. dt is clamped so a background tab can't teleport time. */
+  advance(dtMs: number): void {
+    if (this.done) return;
+    const dt = Math.min(1000, Math.max(0, dtMs));
+    this.elapsedMs = Math.min(this.rules.durationMs, this.elapsedMs + dt);
+  }
+
+  /** Place a point if the match is live and budget remains. Returns success. */
+  addPoint(x: number, y: number, label: number, byAi: boolean): boolean {
+    if (this.done || this.budgetLeft <= 0) return false;
+    this.points.push({ x, y, label, byAi, atMs: this.elapsedMs });
+    return true;
+  }
+
+  /** All placed points as a Dataset (may be empty — callers handle 0 rows). */
   dataset(): Dataset {
-    const baseRows = this.base.X.rows;
-    const n = baseRows + this.sabotage.length;
+    const n = this.points.length;
     const X = new Float64Array(n * 2);
     const Y = new Float64Array(n);
-    X.set(this.base.X.data, 0);
-    Y.set(this.base.Y.data, 0);
-    for (let i = 0; i < this.sabotage.length; i++) {
-      const s = this.sabotage[i]!;
-      X[(baseRows + i) * 2] = s.x;
-      X[(baseRows + i) * 2 + 1] = s.y;
-      Y[baseRows + i] = s.label;
+    for (let i = 0; i < n; i++) {
+      const p = this.points[i]!;
+      X[i * 2] = p.x;
+      X[i * 2 + 1] = p.y;
+      Y[i] = p.label;
     }
     return {
       kind: 'classification',
@@ -82,48 +108,32 @@ export class VersusMatch {
     };
   }
 
-  addSabotage(points: SabotagePoint[]): void {
-    this.sabotage.push(...points);
-  }
-
-  /** Saboteur points still available this attack. */
-  budgetLeft(placedThisTurn: number): number {
-    return Math.max(0, this.rules.pointsPerRound - placedThisTurn);
-  }
-
-  endTrainerTurn(): void {
-    this.phase = this.attacksDone >= this.rules.rounds ? 'done' : 'saboteur';
-  }
-
-  endSaboteurTurn(): void {
-    this.attacksDone++;
-    this.phase = 'trainer';
-  }
-
-  /** 1-based label for the attack currently being prepared. */
-  get attackNumber(): number {
-    return Math.min(this.attacksDone + 1, this.rules.rounds);
-  }
-
-  /** Accuracy over every point currently on the arena. */
+  /** Accuracy over every placed point (1 when nothing has been placed yet). */
   score(predict: ProbFn): number {
     const ds = this.dataset();
-    if (ds.X.rows === 0) return 0;
+    if (ds.X.rows === 0) return 1;
     return accuracy(predict(ds.X), ds.Y);
   }
 
-  /** Final verdict once the match is done. */
+  /** Final verdict, only once the clock has run out. */
   winner(predict: ProbFn): Role | null {
-    if (this.phase !== 'done') return null;
+    if (!this.done) return null;
+    if (this.points.length < this.rules.minPoints) return 'trainer';
     return this.score(predict) >= this.rules.winThreshold ? 'trainer' : 'saboteur';
   }
 }
 
 /* ===========================================================================
-   Saboteur AI
+   AI Saboteur — one point at a time, live.
+
+   Two regimes: while the board is sparse it SEEDS a structurally hard pattern
+   (the saboteur is the data generator now — there are no base patterns); once
+   the trainer's model has shape, it EXPLOITS confidently-wrong regions.
    ========================================================================= */
 
-function nearestDist(x: number, y: number, pts: Array<{ x: number; y: number }>): number {
+const SEED_UNTIL = 14;
+
+function nearestDist(x: number, y: number, pts: ReadonlyArray<{ x: number; y: number }>): number {
   let best = Infinity;
   for (const p of pts) {
     const d = Math.hypot(p.x - x, p.y - y);
@@ -132,159 +142,112 @@ function nearestDist(x: number, y: number, pts: Array<{ x: number; y: number }>)
   return best;
 }
 
+/** Label a position per the difficulty's seed pattern. */
+function seedLabel(x: number, y: number, skill: Difficulty, rng: Rng): number {
+  if (skill === 'easy') return rng.next() < 0.5 ? 0 : 1; // noise — easy to fit or ignore
+  if (skill === 'medium') {
+    // Alternating rings: closed-curve boundaries, needs real capacity.
+    const r = Math.hypot(x, y);
+    return Math.floor(r / 0.34) % 2;
+  }
+  // hard: fine checkerboard — many disjoint regions, brutal for a small budget.
+  const cell = 0.5;
+  return (Math.floor((x + 1) / cell) + Math.floor((y + 1) / cell)) % 2;
+}
+
 /**
- * Choose where the saboteur drops points. The core trick: find places the model is
- * *confidently wrong-able* — drop a blue point deep in a region the model calls orange
- * (and vice-versa), forcing the trainer to either misclassify it or contort the boundary.
- *
- * Difficulty scales cleverness: `easy` is nearly random; `medium` greedily targets the
- * most confident regions; `hard` also prefers isolated spots far from same-class support
- * (harder for a capacity-limited network to carve out).
+ * Choose the saboteur's next point. `predict` may be null while the trainer has no
+ * trained model yet (then we always seed). Returns null only if no position is viable.
  */
-export function saboteurMove(
-  predict: ProbFn,
-  match: VersusMatch,
+export function pickSabotagePoint(
+  predict: ProbFn | null,
+  points: ReadonlyArray<PlacedPoint>,
   skill: Difficulty,
   rng: Rng,
-  count = match.rules.pointsPerRound,
-): SabotagePoint[] {
-  const existing = [
-    ...match.base.X.toRows().map((r, i) => ({ x: r[0]!, y: r[1]!, label: match.base.Y.data[i]! })),
-    ...match.sabotage.map((s) => ({ x: s.x, y: s.y, label: s.label })),
-  ];
+): { x: number; y: number; label: number } | null {
+  const seeding = !predict || points.length < SEED_UNTIL;
+  // Hard keeps reinforcing its pattern part of the time even late — structure is what
+  // starves an 18-neuron budget, not isolated potshots.
+  const reinforce = skill === 'hard' && rng.next() < 0.35;
 
-  // Candidate grid over the data region, with jitter so repeated turns differ.
+  if (seeding || reinforce) {
+    for (let tries = 0; tries < 24; tries++) {
+      const x = rng.range(-0.95, 0.95);
+      const y = rng.range(-0.95, 0.95);
+      if (nearestDist(x, y, points) < 0.06) continue; // don't stack on an existing point
+      return { x, y, label: seedLabel(x, y, skill, rng) };
+    }
+    return null;
+  }
+
+  // Exploit: probe a jittered grid, hit where the model is confidently wrong-able.
+  const G = 18;
   const candidates: Array<{ x: number; y: number }> = [];
-  const G = 22;
   for (let i = 0; i < G; i++) {
     for (let j = 0; j < G; j++) {
-      const jx = (rng.next() - 0.5) * (2 / G);
-      const jy = (rng.next() - 0.5) * (2 / G);
-      const x = -1 + (2 * (i + 0.5)) / G + jx;
-      const y = -1 + (2 * (j + 0.5)) / G + jy;
-      if (x > -1.05 && x < 1.05 && y > -1.05 && y < 1.05) candidates.push({ x, y });
+      const x = -1 + (2 * (i + 0.5)) / G + (rng.next() - 0.5) * (2 / G);
+      const y = -1 + (2 * (j + 0.5)) / G + (rng.next() - 0.5) * (2 / G);
+      candidates.push({ x, y });
     }
   }
-
   const probs = predict(Matrix.fromRows(candidates.map((c) => [c.x, c.y])));
 
-  const minSepOpposite = 0.1; // don't sit right on an opposite-class point (no contradictions)
-  const spread = 0.16; // keep our own drops apart
-
-  const scored = candidates.map((c, k) => {
-    const p = probs.data[k]!; // P(orange)
-    const modelGuess = p >= 0.5 ? 1 : 0;
-    const label = 1 - modelGuess; // place the opposite class
-    const confidence = Math.abs(p - 0.5) * 2; // [0,1]: how sure the model is here
-    const sameClass = existing.filter((e) => e.label === label);
-    const oppClass = existing.filter((e) => e.label !== label);
-    const sameDist = nearestDist(c.x, c.y, sameClass);
-    const oppDist = nearestDist(c.x, c.y, oppClass);
+  let best: { x: number; y: number; label: number } | null = null;
+  let bestScore = -Infinity;
+  for (let k = 0; k < candidates.length; k++) {
+    const c = candidates[k]!;
+    if (nearestDist(c.x, c.y, points) < 0.06) continue;
+    const p = probs.data[k]!;
+    const label = p >= 0.5 ? 0 : 1; // opposite of the model's current guess
+    const confidence = Math.abs(p - 0.5) * 2;
+    const sameDist = nearestDist(c.x, c.y, points.filter((q) => q.label === label));
     let s: number;
-    if (skill === 'easy') s = rng.next(); // basically random
+    if (skill === 'easy') s = rng.next() * (confidence > 0.15 ? 1 : 0.1);
     else if (skill === 'medium') s = confidence;
-    else s = confidence * (0.6 + Math.min(1, sameDist)); // hard: prefer isolated, deep-in-wrong spots
-    return { c, label, score: s, oppDist, confidence };
-  });
-
-  const chosen: SabotagePoint[] = [];
-  const take = (
-    list: typeof scored,
-    spreadMin: number,
-  ): void => {
-    for (const cand of list) {
-      if (chosen.length >= count) break;
-      if (cand.oppDist < minSepOpposite) continue; // never contradict a nearby real point
-      if (nearestDist(cand.c.x, cand.c.y, chosen) < spreadMin) continue;
-      chosen.push({ x: cand.c.x, y: cand.c.y, label: cand.label, byAi: true });
-    }
-  };
-
-  // Primary pass: the skill's own ordering at full spread.
-  take([...scored].sort((a, b) => b.score - a.score), spread);
-
-  // Fallback: if the quota isn't met, relax the spread and rank by confidence so an
-  // attack always lands meaningful points (the minSepOpposite contradiction guard stays).
-  if (chosen.length < count) {
-    const byConfidence = [...scored].sort((a, b) => b.confidence - a.confidence);
-    for (const relaxed of [spread * 0.6, spread * 0.3, 0]) {
-      if (chosen.length >= count) break;
-      take(byConfidence, relaxed);
+    else s = confidence * (0.5 + Math.min(1, sameDist)); // isolated deep strikes
+    if (s > bestScore) {
+      bestScore = s;
+      best = { x: c.x, y: c.y, label };
     }
   }
-  return chosen;
+  return best;
 }
 
 /* ===========================================================================
-   Trainer AI (auto-config within the neuron budget)
+   AI Trainer — periodic live retuning within the neuron budget.
    ========================================================================= */
-
-export interface TrainerPlan {
-  config: StudioConfig;
-  steps: number;
-}
-
-/**
- * Pick an architecture + hyperparameters for an automated trainer turn, respecting the
- * neuron budget. Skill scales how well the budget is used: `easy` under-builds, `hard`
- * spends the budget on a capable two-layer ReLU net.
- */
-export function trainerPlan(match: VersusMatch, skill: Difficulty): TrainerPlan {
-  const budget = match.rules.neuronBudget;
-  const pts = match.dataset().X.rows;
-  // More points on the board → lean toward more capacity (still capped by budget).
-  const want = Math.min(budget, Math.round(8 + pts / 12));
-
-  let hidden: number[];
-  let activation: string;
-  let lr: number;
-  let steps = match.rules.aiTrainSteps;
-
-  if (skill === 'easy') {
-    hidden = [Math.max(2, Math.min(budget, 6))];
-    activation = 'tanh';
-    lr = 0.08;
-    steps = Math.round(steps * 0.7);
-  } else if (skill === 'medium') {
-    const w = Math.max(4, Math.min(budget, want));
-    hidden = [w];
-    activation = 'tanh';
-    lr = 0.12;
-  } else {
-    // hard: split the budget across two ReLU layers for sharp, capacity-efficient creases.
-    const total = Math.min(budget, Math.max(12, want));
-    const a = Math.min(budget - 2, Math.round(total * 0.6));
-    const b = Math.max(2, Math.min(budget - a, total - a));
-    hidden = [a, b];
-    activation = 'relu';
-    lr = 0.06;
-    steps = Math.round(steps * 1.15);
-  }
-
-  return {
-    config: { hidden, activation, lr, l2: 0, batchSize: 16, momentum: 0.9 },
-    steps,
-  };
-}
-
-/* ===========================================================================
-   Hints for a human Trainer — leveled from hand-holding to nudges.
-   ========================================================================= */
-
-export type HintLevel = 0 | 1 | 2 | 3; // 0 = off, 1 = most help, 3 = least
 
 export function neuronsUsed(config: StudioConfig): number {
   return config.hidden.reduce((s, w) => s + w, 0);
 }
 
-/** Where did the last attack land, on average? Helps point a player at the trouble. */
-function lastAttackCentroid(match: VersusMatch): { x: number; y: number; n: number } {
-  const last = match.sabotage.filter((s) => s.byAi).slice(-match.rules.pointsPerRound);
-  if (last.length === 0) return { x: 0, y: 0, n: 0 };
-  const x = last.reduce((s, p) => s + p.x, 0) / last.length;
-  const y = last.reduce((s, p) => s + p.y, 0) / last.length;
-  return { x, y, n: last.length };
+/**
+ * Pick the architecture an automated trainer should be running right now, given how
+ * much data is on the board. Skill scales how well the budget is spent. The caller
+ * applies it only when it differs (warm-keeping trained weights otherwise).
+ */
+export function liveTrainerPlan(
+  pointCount: number,
+  skill: Difficulty,
+  budget: number,
+): StudioConfig {
+  if (skill === 'easy') {
+    return { hidden: [Math.min(budget, 6)], activation: 'tanh', lr: 0.08, l2: 0, batchSize: 16, momentum: 0.9 };
+  }
+  if (skill === 'medium') {
+    const w = Math.min(budget, 8 + Math.floor(pointCount / 12));
+    return { hidden: [w], activation: 'tanh', lr: 0.12, l2: 0, batchSize: 16, momentum: 0.9 };
+  }
+  // hard: spend the budget across two ReLU layers, growing with the data.
+  const total = Math.min(budget, 12 + Math.floor(pointCount / 10));
+  const a = Math.max(2, Math.round(total * 0.6));
+  const b = Math.max(2, total - a);
+  return { hidden: [a, b], activation: 'relu', lr: 0.06, l2: 0, batchSize: 16, momentum: 0.9 };
 }
+
+/* ===========================================================================
+   Live hints for a human Trainer — leveled from hand-holding to bare stats.
+   ========================================================================= */
 
 function region(x: number, y: number): string {
   const v = y > 0.33 ? 'top' : y < -0.33 ? 'bottom' : 'middle';
@@ -295,8 +258,17 @@ function region(x: number, y: number): string {
   return `the ${v}-${h}`;
 }
 
-export function trainerHint(
-  match: VersusMatch,
+/** Where the saboteur has been hitting lately (centroid of recent drops). */
+function recentAttackRegion(match: LiveMatch): string | null {
+  const recent = match.points.slice(-8);
+  if (recent.length < 3) return null;
+  const x = recent.reduce((s, p) => s + p.x, 0) / recent.length;
+  const y = recent.reduce((s, p) => s + p.y, 0) / recent.length;
+  return region(x, y);
+}
+
+export function liveTrainerHint(
+  match: LiveMatch,
   config: StudioConfig,
   acc: number,
   level: HintLevel,
@@ -305,31 +277,27 @@ export function trainerHint(
   const used = neuronsUsed(config);
   const budget = match.rules.neuronBudget;
   const free = budget - used;
-  const { x, y, n } = lastAttackCentroid(match);
-  const where = n > 0 ? region(x, y) : 'the new points';
+  const secs = Math.ceil(match.remainingMs / 1000);
+  const target = match.rules.winThreshold;
+  const where = recentAttackRegion(match);
 
   if (level >= 3) {
-    // Minimal — just the situation.
-    return `Accuracy ${(acc * 100).toFixed(0)}%, target ${(match.rules.winThreshold * 100).toFixed(0)}%. You’ve spent ${used}/${budget} neurons.`;
+    return `${secs}s left · accuracy ${(acc * 100).toFixed(0)}% (need ${(target * 100).toFixed(0)}%) · ${used}/${budget} neurons.`;
   }
   if (level === 2) {
-    if (acc >= match.rules.winThreshold)
-      return `You’re above target (${(acc * 100).toFixed(0)}%). Train a bit more to lock it in before the next attack.`;
-    if (free >= 6) return `Below target near ${where}. You have ${free} unused neurons — spend some.`;
-    return `Below target and nearly out of budget. Make your neurons count: retrain longer, or switch activation to ReLU for sharper boundaries.`;
+    if (acc >= target) return `Holding above target with ${secs}s left. Keep training — late drops${where ? ` near ${where}` : ''} can still flip it.`;
+    if (free >= 4) return `Below target. You still have ${free} unused neurons — spend them${where ? `; the pressure is in ${where}` : ''}.`;
+    return `Below target and out of spare neurons. Squeeze the ones you have: try ReLU, nudge the learning rate, keep training.`;
   }
-  // level 1 — most explicit.
-  if (acc >= match.rules.winThreshold) {
-    return `Holding at ${(acc * 100).toFixed(0)}%. Press Train for a few seconds so the boundary firms up around ${where}, then end your turn.`;
+  // level 1 — most explicit
+  if (acc >= target) {
+    return `You're winning (${(acc * 100).toFixed(0)}% ≥ ${(target * 100).toFixed(0)}%) with ${secs}s on the clock. Leave training running so the boundary keeps absorbing new points${where ? ` around ${where}` : ''}.`;
   }
   if (config.hidden.length === 0) {
-    return `Your network has no hidden layer — it can only draw one straight line, and the saboteur’s points in ${where} need a bent boundary. Add a hidden layer of ~12, then Train.`;
+    return `No hidden layer = one straight line, and the saboteur is painting shapes a line can't split. Add a hidden layer (try ${Math.min(12, Math.max(4, free))}) and keep Train running.`;
   }
-  if (free >= 8) {
-    return `The saboteur clustered points in ${where} and your boundary can’t reach them. You have ${free} unused neurons (of ${budget}). Add a layer of ${Math.min(free, 12)} or widen an existing one, Reset, and Train.`;
+  if (free >= 4) {
+    return `The saboteur is beating you${where ? ` around ${where}` : ''}. You've only spent ${used} of ${budget} neurons — widen a layer or add one (${free} free), then let it retrain.`;
   }
-  if (free >= 2) {
-    return `Close. The trouble is around ${where}. Add your last ${free} neurons, switch to ReLU for crisper creases, and train longer.`;
-  }
-  return `You’re at the neuron budget (${budget}). No more capacity to add — squeeze it out: ReLU activation, a higher learning rate, and more training steps to fit ${where}.`;
+  return `You're at the ${budget}-neuron cap and still under target. Switch to ReLU for sharper creases, raise the learning rate a touch, and don't stop training — ${secs}s left.`;
 }

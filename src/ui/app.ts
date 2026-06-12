@@ -3,14 +3,7 @@ import { renderRich } from './rich';
 import { fitCanvas } from './canvas';
 import { Matrix } from '../engine/matrix';
 import { Rng } from '../engine/rng';
-import {
-  DATASET_GENERATORS,
-  gaussianBlobs,
-  circlesData,
-  moonsData,
-  xorData,
-  type Dataset,
-} from '../data/datasets';
+import { DATASET_GENERATORS, type Dataset } from '../data/datasets';
 import { CHALLENGES, type Target } from '../game/challenges';
 import {
   emptyProgress,
@@ -38,21 +31,21 @@ import { Studio, defaultConfig, type StudioConfig } from './studio';
 import { coach, type CoachTip } from '../game/coach';
 import { LESSONS, CONCEPTS, ioExplainer, TUTORIAL } from '../content/curriculum';
 import {
-  VersusMatch,
-  VERSUS_RULES,
-  VERSUS_BASE_POINTS,
-  saboteurMove,
-  trainerPlan,
-  trainerHint,
+  LiveMatch,
+  LIVE_RULES,
+  AI_DROP_INTERVAL,
+  AI_TUNE_INTERVAL,
+  pickSabotagePoint,
+  liveTrainerPlan,
+  liveTrainerHint,
   neuronsUsed,
   type Role,
   type Difficulty,
   type HintLevel,
-  type SabotagePoint,
 } from '../game/versus';
 import { Tutorial, hasSeenTutorial } from './tutorial';
+import { modeFromPath, pathForMode, type Mode } from './router';
 
-type Mode = 'learn' | 'challenge' | 'sandbox' | 'versus';
 interface Pt {
   x: number;
   y: number;
@@ -66,23 +59,34 @@ const MIN_WIDTH = 1;
 const DRAW_ID = 'draw';
 const SANDBOX_N = 240;
 const LESSONS_KEY = 'neuroforge.lessons';
-const SABOTAGE_MIN_SEP = 0.1;
+const VERSUS_NUDGE_KEY = 'neuroforge.versusNudged';
 const TELEMETRY_EVERY = 4; // frames between telemetry refreshes while training
 
+/** In-place-updated HUD elements for a live match (built once per match — no flicker). */
+interface VsHudEls {
+  acc: HTMLElement;
+  fill: HTMLElement;
+  timer: HTMLElement;
+  pts: HTMLElement;
+  /** Optional mirror of the points-left readout in the left panel. */
+  panelPts: HTMLElement | null;
+}
+
 interface VsState {
-  match: VersusMatch;
+  match: LiveMatch;
   studio: Studio;
   humanRole: Role;
   aiVsAi: boolean;
   difficulty: Difficulty;
   hintLevel: HintLevel;
   saboClass: number;
-  placedThisTurn: number;
   rng: Rng;
-  queue: SabotagePoint[]; // pending AI saboteur drops
-  aiStepsLeft: number; // pending AI trainer steps
-  tick: number;
+  /** Match-time (elapsedMs) thresholds for the next AI actions. */
+  nextAiDropAt: number;
+  nextAiTuneAt: number;
   finished: boolean;
+  winner: Role | null;
+  hud: VsHudEls | null;
 }
 
 export class App {
@@ -108,6 +112,20 @@ export class App {
 
   private vs: VsState | null = null;
 
+  /** rAF timestamp of the previous frame (0 = first frame). */
+  private lastFrameT = 0;
+  /** Caches so per-frame UI refreshes only touch the DOM when content changes. */
+  private statLabels: string[] = [];
+  private statValueEls: HTMLElement[] = [];
+  private statValues: string[] = [];
+  private coachKey = '';
+  /** Consecutive adversarial placements detected in sandbox draw mode (→ Versus nudge). */
+  private adversarialStreak = 0;
+  /** Live refs for the neuron-budget bar (when shown). */
+  private budgetEls: { n: HTMLElement; fill: HTMLElement; budget: number } | null = null;
+  /** A staged (not yet rebuilt) architecture change exists — flushed once per frame. */
+  private archDirty = false;
+
   private refs: {
     runBtn: HTMLButtonElement;
     status: HTMLElement;
@@ -130,22 +148,35 @@ export class App {
   } = {} as never;
 
   // ===== Mount ============================================================
+  /** The app's base path ('/neuroforge/' in prod). Always ends with '/'. */
+  private base(): string {
+    return import.meta.env.BASE_URL;
+  }
+
   mount(root: HTMLElement): void {
     this.progress = loadProgress();
     this.lessonsDone = loadLessons();
     const firstOpen = CHALLENGES.findIndex((c) => !isCompleted(this.progress, c.id));
     this.challengeIndex = firstOpen === -1 ? 0 : firstOpen;
-    // Land returning players who finished the tour straight in Challenges.
-    this.mode = hasSeenTutorial() && this.lessonsDone.size > 0 ? 'challenge' : 'learn';
+
+    // Mode comes from the URL path when present (/learn, /challenges, /sandbox,
+    // /versus); otherwise land new players in Learn and returning ones in Challenges.
+    const fromUrl = modeFromPath(window.location.pathname, this.base());
+    this.mode = fromUrl ?? (hasSeenTutorial() && this.lessonsDone.size > 0 ? 'challenge' : 'learn');
 
     clear(root);
     root.append(this.buildTopbar(), this.buildStage(), this.buildFooter());
 
-    this.enterMode(this.mode);
+    // Canonicalise the URL (strips index.html, lands on the named path).
+    this.enterMode(this.mode, 'replace');
+    window.addEventListener('popstate', () => {
+      const m = modeFromPath(window.location.pathname, this.base()) ?? 'learn';
+      if (m !== this.mode) this.enterMode(m, 'none');
+    });
     window.addEventListener('resize', () => this.handleResize());
-    requestAnimationFrame(() => {
+    requestAnimationFrame((t) => {
       this.handleResize();
-      this.loop();
+      this.loop(t);
       if (!hasSeenTutorial()) new Tutorial(TUTORIAL).start();
     });
   }
@@ -171,14 +202,31 @@ export class App {
       ['Concepts'],
     );
 
-    return el('header', { class: 'topbar' }, [
-      el('div', { class: 'brand' }, [
+    // The logo is a real link to the app's home (the Learn course) — clicking it
+    // also normalises any stale /index.html URL to the named path.
+    const brand = el(
+      'a',
+      {
+        class: 'brand',
+        attrs: { href: pathForMode('learn', this.base()), 'aria-label': 'NeuroForge home' },
+        on: {
+          click: (e) => {
+            e.preventDefault();
+            this.enterMode('learn', 'push');
+          },
+        },
+      },
+      [
         el('div', { class: 'brand-mark' }, [neuronGlyph()]),
         el('div', { class: 'brand-titles' }, [
           el('div', { class: 'brand-title', html: 'Neuro<em>Forge</em>' }),
           el('div', { class: 'brand-tag' }, ['build · train · understand']),
         ]),
-      ]),
+      ],
+    );
+
+    return el('header', { class: 'topbar' }, [
+      brand,
       el('div', { class: 'topbar-actions' }, [seg, el('div', { class: 'seg ghost-seg' }, [concepts, help])]),
     ]);
   }
@@ -318,17 +366,31 @@ export class App {
   // ===== Mode routing =====================================================
   private setMode(mode: Mode): void {
     if (this.mode === mode) return;
-    this.enterMode(mode);
+    this.enterMode(mode, 'push');
   }
 
-  private enterMode(mode: Mode): void {
+  /** Switch modes; `nav` controls how the URL reflects it (path-name routing). */
+  private enterMode(mode: Mode, nav: 'push' | 'replace' | 'none'): void {
     this.running = false;
     this.mode = mode;
     this.probe = null;
     this.hoverNeuron = null;
+    this.adversarialStreak = 0; // a new context is not a continuation of saboteur play
+    document.querySelector('.toast')?.remove(); // a stale nudge shouldn't follow the user around
     Array.from(this.refs.modeSeg.children).forEach((c, i) =>
       c.classList.toggle('active', i === ['learn', 'challenge', 'sandbox', 'versus'].indexOf(mode)),
     );
+
+    const target = pathForMode(mode, this.base());
+    try {
+      if (nav === 'push' && window.location.pathname !== target) {
+        window.history.pushState({}, '', target);
+      } else if (nav === 'replace' && window.location.pathname !== target) {
+        window.history.replaceState({}, '', target);
+      }
+    } catch {
+      /* history may be unavailable (e.g. sandboxed iframe) — the app still works */
+    }
 
     // Entering or leaving Versus always abandons any in-progress match (start at setup).
     this.vs = null;
@@ -475,23 +537,33 @@ export class App {
       ['+ add hidden layer'],
     );
 
-    const budgetBar =
-      neuronBudget !== undefined
-        ? el('div', { class: 'budget' }, [
-            el('div', { class: 'budget-row' }, [
-              el('span', {}, ['neuron budget']),
-              el('span', { class: used > neuronBudget ? 'budget-n over' : 'budget-n' }, [`${used} / ${neuronBudget}`]),
-            ]),
-            el('div', { class: 'budget-track' }, [
-              el('div', {
-                class: used > neuronBudget ? 'budget-fill over' : 'budget-fill',
-                style: { width: `${Math.min(100, (used / neuronBudget) * 100)}%` },
-              }),
-            ]),
-          ])
-        : null;
+    let budgetBar: HTMLElement | null = null;
+    this.budgetEls = null;
+    if (neuronBudget !== undefined) {
+      const n = el('span', { class: used > neuronBudget ? 'budget-n over' : 'budget-n' }, [`${used} / ${neuronBudget}`]);
+      const fill = el('div', {
+        class: used > neuronBudget ? 'budget-fill over' : 'budget-fill',
+        style: { width: `${Math.min(100, (used / neuronBudget) * 100)}%` },
+      });
+      budgetBar = el('div', { class: 'budget' }, [
+        el('div', { class: 'budget-row' }, [el('span', {}, ['neuron budget']), n]),
+        el('div', { class: 'budget-track' }, [fill]),
+      ]);
+      this.budgetEls = { n, fill, budget: neuronBudget };
+    }
 
     return el('div', { class: 'arch' }, [rows, addBtn, budgetBar].filter(Boolean) as Node[]);
+  }
+
+  /** Live update of the neuron-budget readout (used mid-drag; no panel re-render). */
+  private refreshBudgetBar(): void {
+    const b = this.budgetEls;
+    if (!b || !b.n.isConnected) return;
+    const used = neuronsUsed(this.studioConfig());
+    b.n.textContent = `${used} / ${b.budget}`;
+    b.n.className = used > b.budget ? 'budget-n over' : 'budget-n';
+    b.fill.className = used > b.budget ? 'budget-fill over' : 'budget-fill';
+    b.fill.style.width = `${Math.min(100, (used / b.budget) * 100)}%`;
   }
 
   private endcap(n: string, label: string): HTMLElement {
@@ -502,15 +574,37 @@ export class App {
   }
 
   private layerChip(width: number, idx: number): HTMLElement {
+    // Cap the slider's reachable range by the (versus) neuron budget up front.
+    const others = this.studioConfig().hidden.reduce((s, w) => s + w, 0) - width;
+    const max = Math.min(32, this.neuronBudget() - others);
+    const label = el('span', { class: 'chip-w' }, [String(width)]);
     const slider = el('input', {
       class: 'chip-range',
-      attrs: { type: 'range', min: String(MIN_WIDTH), max: '32', step: '1', value: String(width), 'aria-label': `layer ${idx + 1} width` },
+      attrs: { type: 'range', min: String(MIN_WIDTH), max: String(Math.max(MIN_WIDTH, max)), step: '1', value: String(width), 'aria-label': `layer ${idx + 1} width` },
       on: {
-        input: (e) => this.setWidth(idx, Number((e.target as HTMLInputElement).value)),
+        // While dragging: update config + readouts IN PLACE and mark the engine
+        // dirty — the rebuild happens at most once per frame in loop(). Re-rendering
+        // the panel here would destroy the slider mid-drag and kill the gesture.
+        input: (e) => {
+          this.stageWidth(idx, Number((e.target as HTMLInputElement).value));
+          label.textContent = String(this.studioConfig().hidden[idx]);
+          this.refreshBudgetBar();
+        },
+        // Interaction committed (note: keyboard arrows fire this per press): flush,
+        // resync the panel, and hand focus back to the rebuilt slider so keyboard
+        // adjustment keeps working.
+        change: (e) => {
+          const hadFocus = document.activeElement === e.target;
+          this.flushArch();
+          this.rerenderLeft();
+          if (hadFocus) {
+            this.refs.leftPanel.querySelectorAll<HTMLInputElement>('.chip-range')[idx]?.focus();
+          }
+        },
       },
     });
     return el('div', { class: 'layer-chip' }, [
-      el('span', { class: 'chip-w' }, [String(width)]),
+      label,
       slider,
       el('div', { class: 'chip-controls' }, [
         el('button', { class: 'chip-btn', on: { click: () => this.changeWidth(idx, -1) } }, ['−']),
@@ -684,7 +778,7 @@ export class App {
             this.renderSandboxPanel();
           }),
         ]),
-        el('button', { class: 'btn ghost', on: { click: () => { this.customPoints = []; this.rebuildSandboxData(); this.studio.rebuild(true); this.redrawAll(); } } }, ['Clear points']),
+        el('button', { class: 'btn ghost', on: { click: () => { this.customPoints = []; this.adversarialStreak = 0; this.rebuildSandboxData(); this.studio.rebuild(true); this.redrawAll(); } } }, ['Clear points']),
       );
     }
 
@@ -714,7 +808,7 @@ export class App {
   // ===== Architecture mutations ==========================================
   /** In Versus the human Trainer is capped to the neuron budget; otherwise unconstrained. */
   private neuronBudget(): number {
-    return this.mode === 'versus' && this.vs && this.isHumanTrainerTurn() ? VERSUS_RULES.neuronBudget : Infinity;
+    return this.mode === 'versus' && this.vs && this.humanIsTrainer() ? LIVE_RULES.neuronBudget : Infinity;
   }
 
   private addLayer(): void {
@@ -735,16 +829,33 @@ export class App {
   private changeWidth(idx: number, delta: number): void {
     this.setWidth(idx, (this.studioConfig().hidden[idx] ?? 0) + delta);
   }
-  private setWidth(idx: number, width: number): void {
+  /**
+   * Stage a width change: clamp it into the (versus) budget, write the config, and
+   * mark the engine dirty. The actual rebuild is coalesced to one per frame because
+   * pointer 'input' events can outrun the display's frame rate.
+   */
+  private stageWidth(idx: number, width: number): void {
     const next = [...this.studioConfig().hidden];
-    // Cap so the total never exceeds the budget (only finite in Versus).
     const others = next.reduce((s, w) => s + w, 0) - (next[idx] ?? 0);
     const budgetCap = this.neuronBudget() - others;
     const maxForThis = Math.min(MAX_WIDTH, budgetCap);
     next[idx] = Math.max(MIN_WIDTH, Math.min(maxForThis, width));
     this.current().setConfig({ hidden: next });
+    this.archDirty = true;
+  }
+
+  /** Apply any staged architecture change immediately (loop() also calls this per frame). */
+  private flushArch(): void {
+    if (!this.archDirty) return;
+    this.archDirty = false;
     this.applyChange(true);
-    this.rerenderLeft();
+  }
+
+  /** Set a layer's width synchronously. `rerender=false` keeps the panel DOM. */
+  private setWidth(idx: number, width: number, rerender = true): void {
+    this.stageWidth(idx, width);
+    this.flushArch();
+    if (rerender) this.rerenderLeft();
   }
 
   private rerenderLeft(): void {
@@ -757,7 +868,9 @@ export class App {
 
   // ===== Engine actions ==================================================
   private applyChange(structural: boolean): void {
-    this.running = false;
+    // In a live Versus match the duel keeps running while you retune — pausing on
+    // every tweak would fight the real-time format. Everywhere else, pause.
+    if (!(this.mode === 'versus' && this.vs && !this.vs.finished)) this.running = false;
     this.current().rebuild(structural);
     this.hideSolved();
     this.redrawAll();
@@ -787,6 +900,7 @@ export class App {
   }
   private newData(): void {
     this.running = false;
+    this.adversarialStreak = 0; // fresh data = fresh context for the versus nudge
     if (this.mode === 'sandbox' && this.sandboxDatasetId === DRAW_ID) this.customPoints = [];
     else this.dataNudge++;
     this.current().reseed();
@@ -796,7 +910,14 @@ export class App {
   }
 
   // ===== Run loop ========================================================
-  private loop(): void {
+  private loop(t: number): void {
+    // Real frame delta (clamped: a backgrounded tab must not teleport match time).
+    const dt = this.lastFrameT === 0 ? 16 : Math.min(250, Math.max(0, t - this.lastFrameT));
+    this.lastFrameT = t;
+
+    // Apply at most one staged architecture rebuild per frame (slider drags).
+    this.flushArch();
+
     // Apply at most one coalesced probe redraw per frame (set by pointermove).
     if (this.probeDirty) {
       this.probeDirty = false;
@@ -805,7 +926,7 @@ export class App {
       if (!this.running) this.redrawArena();
     }
 
-    if (this.mode === 'versus' && this.vs) this.vsTick();
+    if (this.mode === 'versus' && this.vs) this.vsTick(dt);
     else if (this.running && this.current().trainer) {
       this.current().step(STEPS_PER_FRAME);
       this.frame++;
@@ -813,7 +934,7 @@ export class App {
       if (this.frame % TELEMETRY_EVERY === 0) this.refreshTelemetry();
       if (this.frame % 6 === 0) this.redrawInspector();
     }
-    requestAnimationFrame(() => this.loop());
+    requestAnimationFrame((t2) => this.loop(t2));
   }
 
   private redrawAll(): void {
@@ -822,6 +943,8 @@ export class App {
     this.redrawInspector();
     this.refreshInspectorCaption();
     this.refreshIoBox();
+    // Crosshair cursor whenever the arena accepts point placement.
+    this.refs.arenaCanvas.parentElement?.classList.toggle('paintable', this.placementMode() !== null);
   }
 
   // ===== Arena rendering =================================================
@@ -851,8 +974,7 @@ export class App {
         drawBoundary(ctx, vp, studio.forward, 52);
       }
       if (this.mode === 'versus' && this.vs) {
-        drawPoints(ctx, vp, this.vs.match.base.X, this.vs.match.base.Y, 4);
-        this.drawSabotage(ctx, vp);
+        this.drawVersusPoints(ctx, vp);
       } else if (studio.trainData.X.rows > 0) {
         drawPoints(ctx, vp, studio.trainData.X, studio.trainData.Y);
       }
@@ -863,24 +985,31 @@ export class App {
     }
   }
 
-  private drawSabotage(ctx: CanvasRenderingContext2D, vp: ReturnType<typeof makeViewport>): void {
-    if (!this.vs) return;
-    const recent = new Set(this.vs.match.sabotage.slice(-VERSUS_RULES.pointsPerRound));
-    for (const s of this.vs.match.sabotage) {
-      const { sx, sy } = worldToScreen(vp, s.x, s.y);
+  /** Draw every placed point; AI drops from the last ~2.5s get a fading warn ring. */
+  private drawVersusPoints(ctx: CanvasRenderingContext2D, vp: ReturnType<typeof makeViewport>): void {
+    const v = this.vs;
+    if (!v) return;
+    const now = v.match.elapsedMs;
+    for (const p of v.match.points) {
+      const { sx, sy } = worldToScreen(vp, p.x, p.y);
       ctx.beginPath();
-      ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(classColor(s.label));
+      ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = rgba(classColor(p.label));
       ctx.fill();
-      ctx.lineWidth = recent.has(s) ? 2.5 : 1.5;
-      ctx.strokeStyle = recent.has(s) ? 'rgba(255,255,255,0.95)' : 'rgba(10,12,20,0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(10,12,20,0.9)';
       ctx.stroke();
-      // little spike to mark "placed", not natural
-      ctx.beginPath();
-      ctx.arc(sx, sy, 8.5, 0, Math.PI * 2);
-      ctx.strokeStyle = recent.has(s) ? 'rgba(255,206,107,0.9)' : 'rgba(150,170,215,0.25)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      if (p.byAi) {
+        const age = now - p.atMs;
+        if (age < 2500) {
+          const a = 0.95 * (1 - age / 2500);
+          ctx.beginPath();
+          ctx.arc(sx, sy, 8.5 + (age / 2500) * 4, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,206,107,${a.toFixed(3)})`;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
     }
   }
 
@@ -927,12 +1056,14 @@ export class App {
       // On the setup screen (no live match) the panel already rendered its own stats —
       // nothing to refresh, and versusCoachTip would dereference a null match.
       if (!this.vs) return;
+      const v = this.vs;
+      const acc = v.studio.net ? v.match.score(v.studio.forward) : 1;
       this.refreshVsHud();
       this.renderStats([
-        { label: 'accuracy · all points', value: m.hasData ? `${(m.testScore * 100).toFixed(1)}%` : '—', good: false },
-        { label: 'neurons used', value: `${neuronsUsed(studio.config)} / ${VERSUS_RULES.neuronBudget}` },
-        { label: 'loss', value: Number.isFinite(m.loss) ? m.loss.toFixed(4) : '—' },
-        { label: 'steps', value: studio.steps.toLocaleString() },
+        { label: 'accuracy · all points', value: `${(acc * 100).toFixed(1)}%`, good: acc >= LIVE_RULES.winThreshold },
+        { label: 'neurons used', value: `${neuronsUsed(v.studio.config)} / ${LIVE_RULES.neuronBudget}` },
+        { label: 'time left', value: fmtClock(v.match.remainingMs) },
+        { label: 'points left', value: String(v.match.budgetLeft) },
       ]);
       this.renderCoach(this.versusCoachTip());
       return;
@@ -984,19 +1115,46 @@ export class App {
     }
   }
 
+  /**
+   * Update the stat tiles. Called every few frames during training, so it diffs:
+   * if the labels are unchanged it only patches the values that actually changed —
+   * rebuilding the DOM each refresh made the panel visibly flicker.
+   */
   private renderStats(stats: Array<{ label: string; value: string; good?: boolean }>): void {
-    clear(this.refs.statGrid);
-    for (const s of stats) {
-      this.refs.statGrid.append(
-        el('div', { class: 'stat' }, [
-          el('div', { class: 'stat-label' }, [s.label]),
-          el('div', { class: s.good ? 'stat-value good' : 'stat-value' }, [s.value]),
-        ]),
-      );
+    const labels = stats.map((s) => s.label);
+    const sameShape =
+      labels.length === this.statLabels.length && labels.every((l, i) => l === this.statLabels[i]);
+
+    if (!sameShape || this.statValueEls.some((e) => !e.isConnected)) {
+      clear(this.refs.statGrid);
+      this.statLabels = labels;
+      this.statValueEls = [];
+      this.statValues = [];
+      for (const s of stats) {
+        const value = el('div', { class: s.good ? 'stat-value good' : 'stat-value' }, [s.value]);
+        this.statValueEls.push(value);
+        this.statValues.push(s.value);
+        this.refs.statGrid.append(
+          el('div', { class: 'stat' }, [el('div', { class: 'stat-label' }, [s.label]), value]),
+        );
+      }
+      return;
     }
+    stats.forEach((s, i) => {
+      const elV = this.statValueEls[i]!;
+      if (this.statValues[i] !== s.value) {
+        elV.textContent = s.value;
+        this.statValues[i] = s.value;
+      }
+      elV.classList.toggle('good', !!s.good);
+    });
   }
 
+  /** Update the coach callout — skipped entirely when the tip hasn't changed (no flicker). */
   private renderCoach(tip: CoachTip): void {
+    const key = `${tip.tone}|${tip.title}|${tip.body}`;
+    if (key === this.coachKey && this.refs.coach.childElementCount > 0) return;
+    this.coachKey = key;
     clear(this.refs.coach);
     this.refs.coach.className = `coach tone-${tip.tone}`;
     this.refs.coach.append(
@@ -1131,57 +1289,88 @@ export class App {
 
   private placementMode(): 'draw' | 'sabotage' | null {
     if (this.mode === 'sandbox' && this.sandboxDatasetId === DRAW_ID) return 'draw';
-    if (this.mode === 'versus' && this.vs && this.vs.match.phase === 'saboteur' && this.isHumanSaboteurTurn()) return 'sabotage';
+    // Live versus: a human saboteur can paint ANY class ANYWHERE, ANYTIME.
+    if (this.mode === 'versus' && this.vs && !this.vs.finished && this.humanIsSaboteur()) return 'sabotage';
     return null;
   }
 
   private placeAt(wx: number, wy: number): void {
     const mode = this.placementMode();
     if (mode === 'draw') {
+      this.detectAdversarialPlay(wx, wy, this.drawClass);
       this.customPoints.push({ x: wx, y: wy, label: this.drawClass });
       this.rebuildSandboxData();
       this.studio.rebuild(false);
       this.redrawAll();
       this.refreshRunButton();
     } else if (mode === 'sabotage' && this.vs) {
-      if (this.vs.placedThisTurn >= VERSUS_RULES.pointsPerRound) return;
-      // Same fairness rule the AI follows: don't let a drop sit on top of an
-      // opposite-class point (that would make 100% impossible by contradiction).
-      if (this.nearestOppositeDist(wx, wy, this.vs.saboClass) < SABOTAGE_MIN_SEP) {
-        this.flashSaboteurReject();
-        return;
-      }
-      this.vs.match.addSabotage([{ x: wx, y: wy, label: this.vs.saboClass, byAi: false }]);
-      this.vs.placedThisTurn++;
+      if (!this.vs.match.addPoint(wx, wy, this.vs.saboClass, false)) return; // budget/clock
       this.syncVersusData(false);
-      this.redrawAll();
+      if (!this.running) this.redrawArena();
       this.refreshVsHud();
     }
   }
 
-  /** Distance from (x,y) to the nearest existing point of the OTHER class. */
-  private nearestOppositeDist(x: number, y: number, label: number): number {
-    const v = this.vs;
-    if (!v) return Infinity;
-    let best = Infinity;
-    const consider = (px: number, py: number, pl: number): void => {
-      if (pl === label) return;
-      const d = Math.hypot(px - x, py - y);
-      if (d < best) best = d;
-    };
-    const base = v.match.base;
-    for (let i = 0; i < base.X.rows; i++) consider(base.X.get(i, 0), base.X.get(i, 1), base.Y.data[i]!);
-    for (const s of v.match.sabotage) consider(s.x, s.y, s.label);
-    return best;
+  /**
+   * Sandbox → Versus nudge: notice when the player is *deliberately* contradicting a
+   * trained model (dropping a point deep inside the opposite-coloured region). Guards
+   * against false positives: the model must be trained on a real dataset, the
+   * prediction must be confident, and it takes 4 strikes — while clearly cooperative
+   * placements walk the streak back down. Shown once, ever.
+   */
+  private detectAdversarialPlay(wx: number, wy: number, label: number): void {
+    if (this.versusNudgeSeen()) return;
+    const s = this.studio;
+    if (!s.net || s.steps < 150 || s.trainData.X.rows < 12) return;
+    const p = s.forward(new Matrix(1, 2, new Float64Array([wx, wy]))).data[0]!;
+    const adversarial = (p >= 0.7 && label === 0) || (p <= 0.3 && label === 1);
+    const cooperative = (p >= 0.7 && label === 1) || (p <= 0.3 && label === 0);
+    if (adversarial) this.adversarialStreak++;
+    else if (cooperative) this.adversarialStreak = Math.max(0, this.adversarialStreak - 1);
+    if (this.adversarialStreak >= 4) {
+      this.markVersusNudgeSeen();
+      this.showToast(
+        'You’re playing saboteur',
+        'Dropping points where the model is confidently wrong is a whole game here — with an AI on the other side, scoring, and a clock.',
+        'Play Versus',
+        () => this.setMode('versus'),
+      );
+    }
   }
 
-  private flashSaboteurReject(): void {
-    // Briefly surface why the drop was rejected, via the coach callout.
-    this.renderCoach({
-      tone: 'warn',
-      title: 'Too close to an opposite point',
-      body: 'You can’t drop a point right on top of an opposite-class point — that would be an impossible contradiction. Aim for open territory the model is confidently wrong about.',
+  private versusNudgeSeen(): boolean {
+    try {
+      return localStorage.getItem(VERSUS_NUDGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+  private markVersusNudgeSeen(): void {
+    try {
+      localStorage.setItem(VERSUS_NUDGE_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Small dismissible toast (bottom-right), used for the Versus nudge. */
+  private showToast(title: string, body: string, ctaLabel: string, onCta: () => void): void {
+    document.querySelector('.toast')?.remove();
+    const toast = el('div', { class: 'toast', attrs: { role: 'status' } }, [
+      el('div', { class: 'toast-title' }, [title]),
+      el('div', { class: 'toast-body' }, [body]),
+      el('div', { class: 'toast-actions' }, [
+        el('button', { class: 'btn ghost toast-btn', on: { click: () => toast.remove() } }, ['Dismiss']),
+        el('button', { class: 'btn primary toast-btn', on: { click: () => { toast.remove(); onCta(); } } }, [ctaLabel]),
+      ]),
+    ]);
+    // Auto-dismiss after a generous read window, paused while hovered.
+    let timer = window.setTimeout(() => toast.remove(), 20_000);
+    toast.addEventListener('pointerenter', () => window.clearTimeout(timer));
+    toast.addEventListener('pointerleave', () => {
+      timer = window.setTimeout(() => toast.remove(), 10_000);
     });
+    document.body.append(toast);
   }
 
   private onInspectorHover(e: PointerEvent): void {
@@ -1245,6 +1434,19 @@ export class App {
   }
   private refreshStatus(): void {
     const s = this.refs.status;
+    // A live match is its own state — the duel runs even while the human pauses training.
+    if (this.mode === 'versus' && this.vs && !this.vs.finished) {
+      s.className = 'status live';
+      clear(s);
+      s.append(el('span', { class: 'dot' }), 'match live');
+      return;
+    }
+    if (this.mode === 'versus' && this.vs?.finished) {
+      s.className = 'status solved';
+      clear(s);
+      s.append(el('span', { class: 'dot' }), 'match over');
+      return;
+    }
     s.className = this.running ? 'status live' : 'status';
     clear(s);
     s.append(el('span', { class: 'dot' }), this.running ? 'training' : 'idle');
@@ -1288,8 +1490,8 @@ export class App {
     document.body.append(overlay);
   }
 
-  // ===== VERSUS ==========================================================
-  private vsSetup = { humanRole: 'trainer' as Role, aiVsAi: false, difficulty: 'medium' as Difficulty, base: 'moons', hintLevel: 1 as HintLevel };
+  // ===== VERSUS (live) ====================================================
+  private vsSetup = { humanRole: 'trainer' as Role, aiVsAi: false, difficulty: 'medium' as Difficulty, hintLevel: 1 as HintLevel };
 
   private renderVersus(): void {
     if (!this.vs) this.renderVersusSetup();
@@ -1308,14 +1510,6 @@ export class App {
       el('button', { class: s.difficulty === d ? 'seg-btn active' : 'seg-btn', on: { click: () => { s.difficulty = d; this.renderVersusSetup(); } } }, [d]),
     ));
 
-    const baseSel = el('select', { attrs: { 'aria-label': 'Base pattern' }, on: { change: (e) => { s.base = (e.target as HTMLSelectElement).value; } } }, [
-      el('option', { attrs: { value: 'moons' } }, ['Moons (curvy)']),
-      el('option', { attrs: { value: 'circles' } }, ['Circles (ring)']),
-      el('option', { attrs: { value: 'blobs' } }, ['Two Blobs (easy)']),
-      el('option', { attrs: { value: 'xor' } }, ['XOR (corners)']),
-    ]) as HTMLSelectElement;
-    baseSel.value = s.base;
-
     const hint =
       s.aiVsAi || s.humanRole === 'saboteur'
         ? null
@@ -1328,25 +1522,24 @@ export class App {
 
     const roleExplain =
       s.aiVsAi
-        ? 'Watch an AI Trainer defend its boundary while an AI Saboteur attacks it. Great for seeing the capacity battle play out.'
+        ? 'Watch an AI Saboteur paint a hostile dataset, live, while an AI Trainer races to keep fitting it. The accuracy meter is the scoreboard.'
         : s.humanRole === 'trainer'
-          ? 'You build and train the network. An AI Saboteur drops opposite-class points where your model is confidently wrong. Keep accuracy high to win.'
-          : 'You drop points to confuse an AI’s network — place a Class A dot deep in its Class B region. Push accuracy below the threshold to win.';
+          ? 'The board starts EMPTY. An AI Saboteur paints points live — your network trains continuously and you retune it on the fly. Be above the win line when the clock hits zero.'
+          : 'The board starts EMPTY and the clock runs. Paint points anywhere, any class, anytime — the AI’s network adapts live. Drag to paint shapes its neuron budget can’t fit.';
 
     this.setLeft([
       this.panelHead('duel', 'Versus mode'),
       el('div', { class: 'group' }, [el('div', { class: 'group-label' }, ['Who are you?']), roleSeg, el('div', { class: 'mini-note' }, [roleExplain])]),
       el('div', { class: 'group' }, [el('div', { class: 'group-label' }, ['AI difficulty']), diff]),
       el('div', { class: 'group' }, [
-        el('div', { class: 'group-label' }, ['Match']),
-        el('div', { class: 'field' }, [el('div', { class: 'field-row' }, [el('span', { class: 'field-label' }, ['Base pattern'])]), baseSel]),
+        el('div', { class: 'group-label' }, ['Match rules']),
         hint,
         el('div', { class: 'rules-grid' }, [
-          rule('Attacks', String(VERSUS_RULES.rounds)),
-          rule('Pts / attack', String(VERSUS_RULES.pointsPerRound)),
-          rule('Neuron budget', String(VERSUS_RULES.neuronBudget)),
-          rule('Trainer wins ≥', `${(VERSUS_RULES.winThreshold * 100).toFixed(0)}%`),
-        ].filter(Boolean) as Node[]),
+          rule('Clock', fmtClock(LIVE_RULES.durationMs)),
+          rule('Point budget', String(LIVE_RULES.pointBudget)),
+          rule('Neuron budget', String(LIVE_RULES.neuronBudget)),
+          rule('Trainer wins ≥', `${(LIVE_RULES.winThreshold * 100).toFixed(0)}%`),
+        ]),
       ].filter(Boolean) as Node[]),
       el('button', { class: 'btn primary', on: { click: () => this.vsStart() } }, ['Start match ▶']),
     ]);
@@ -1355,15 +1548,20 @@ export class App {
     this.refs.arenaSub.textContent = 'versus · setup';
     this.refs.arenaTitle.textContent = 'Trainer vs Saboteur';
     clear(this.refs.note);
-    this.refs.note.append(el('span', { class: 'note-icon' }, ['¶']), el('div', { class: 'note-body' }, [renderRich('span', '', '**The duel.** One side builds a network to classify the dots; the other drops new dots to break it. Capacity (the neuron budget) vs cunning (where the dots land).')]));
+    this.refs.note.append(el('span', { class: 'note-icon' }, ['¶']), el('div', { class: 'note-body' }, [renderRich('span', '', '**The duel, live.** The saboteur paints the dataset point by point; the trainer’s network fits it in real time under a neuron budget. No turns — whoever holds the accuracy line when the clock ends wins.')]));
     this.refreshLegend();
     clear(this.refs.vsHud);
     clear(this.refs.coach);
-    this.renderStats([{ label: 'status', value: 'ready' }, { label: 'difficulty', value: this.vsSetup.difficulty }, { label: 'base', value: this.vsSetup.base }, { label: 'mode', value: this.vsSetup.aiVsAi ? 'AI vs AI' : 'you' }]);
+    this.coachKey = '';
+    this.renderStats([{ label: 'status', value: 'ready' }, { label: 'difficulty', value: this.vsSetup.difficulty }, { label: 'clock', value: fmtClock(LIVE_RULES.durationMs) }, { label: 'mode', value: this.vsSetup.aiVsAi ? 'AI vs AI' : 'you' }]);
     this.refreshIoBox();
     this.clearCanvas(this.refs.arenaCanvas);
     this.clearCanvas(this.refs.inspectorCanvas);
+    this.clearCanvas(this.refs.lossCanvas);
     clear(this.refs.inspectorCaption);
+    // No run button exists on this panel, so reset the status pill directly (it could
+    // otherwise be stuck showing 'training' from the previous mode).
+    this.refreshStatus();
   }
 
   private clearCanvas(canvas: HTMLCanvasElement): void {
@@ -1373,16 +1571,9 @@ export class App {
 
   private vsStart(): void {
     const s = this.vsSetup;
-    const baseGen: Record<string, (n: number, seed: number) => Dataset> = {
-      moons: moonsData,
-      circles: circlesData,
-      blobs: gaussianBlobs,
-      xor: xorData,
-    };
-    const base = (baseGen[s.base] ?? moonsData)(VERSUS_BASE_POINTS, 7);
     const studio = new Studio({ ...defaultConfig(), hidden: [8], activation: 'tanh', lr: 0.15 });
     studio.task = 'classification';
-    const match = new VersusMatch(VERSUS_RULES, base);
+    const match = new LiveMatch(LIVE_RULES);
     studio.setData(match.dataset(), match.dataset());
     studio.rebuild(true);
 
@@ -1394,209 +1585,163 @@ export class App {
       difficulty: s.difficulty,
       hintLevel: s.hintLevel,
       saboClass: 0,
-      placedThisTurn: 0,
-      rng: new Rng(20260605),
-      queue: [],
-      aiStepsLeft: 0,
-      tick: 0,
+      rng: new Rng(20260611),
+      nextAiDropAt: 800, // first AI drop lands fast so the match feels alive
+      nextAiTuneAt: 0, // AI trainer configures itself immediately
       finished: false,
+      winner: null,
+      hud: null,
     };
-    this.running = false;
-    this.vsEnterPhase();
+    // Training runs from the opening whistle — this is a live duel.
+    this.running = true;
+    this.buildVsHud();
+    this.renderVersusMatchPanel();
     this.refreshArenaHeaderVersus();
+    this.refreshRunButton();
     this.redrawAll();
   }
 
+  private humanIsTrainer(): boolean {
+    return !!this.vs && !this.vs.aiVsAi && this.vs.humanRole === 'trainer';
+  }
+  private humanIsSaboteur(): boolean {
+    return !!this.vs && !this.vs.aiVsAi && this.vs.humanRole === 'saboteur';
+  }
   private aiIsTrainer(): boolean {
     return !!this.vs && (this.vs.aiVsAi || this.vs.humanRole === 'saboteur');
   }
   private aiIsSaboteur(): boolean {
     return !!this.vs && (this.vs.aiVsAi || this.vs.humanRole === 'trainer');
   }
-  private isHumanTrainerTurn(): boolean {
-    return !!this.vs && this.vs.match.phase === 'trainer' && !this.aiIsTrainer();
-  }
-  private isHumanSaboteurTurn(): boolean {
-    return !!this.vs && this.vs.match.phase === 'saboteur' && !this.aiIsSaboteur();
-  }
 
-  /** Set up whatever the new phase needs (AI plans, counters). */
-  private vsEnterPhase(): void {
-    const v = this.vs;
-    if (!v) return;
-    v.placedThisTurn = 0;
-    v.queue = [];
-    v.aiStepsLeft = 0;
-    this.running = false;
-
-    if (v.match.phase === 'trainer') {
-      if (this.aiIsTrainer()) {
-        const plan = trainerPlan(v.match, v.difficulty);
-        // Warm-start: only re-initialise weights when the architecture actually changes;
-        // otherwise keep the trained net and continue from where the last defense left off
-        // (mirrors the human Trainer, who keeps weights across turns).
-        const archChanged =
-          plan.config.hidden.join(',') !== v.studio.config.hidden.join(',') ||
-          plan.config.activation !== v.studio.config.activation;
-        v.studio.config = { ...plan.config };
-        if (archChanged) {
-          v.studio.reseed();
-          v.studio.rebuild(true);
-        } else {
-          v.studio.rebuild(false);
-        }
-        v.aiStepsLeft = plan.steps;
-      }
-    } else if (v.match.phase === 'saboteur') {
-      if (this.aiIsSaboteur()) {
-        v.queue = saboteurMove(v.studio.forward, v.match, v.difficulty, v.rng);
-        if (v.queue.length === 0) {
-          // Nothing feasible — skip straight to ending the attack.
-          v.match.endSaboteurTurn();
-          this.syncVersusData(false);
-          this.vsEnterPhase();
-          return;
-        }
-      }
-    } else {
-      v.finished = true;
-    }
-    this.renderVersusMatchPanel();
-    this.refreshArenaHeaderVersus();
-    this.refreshRunButton();
-    this.refreshVsHud();
-  }
-
+  /** Point set changed → retrain over the new data, KEEPING the learned weights. */
   private syncVersusData(resetWeights: boolean): void {
     const v = this.vs;
     if (!v) return;
     const ds = v.match.dataset();
     v.studio.setData(ds, ds);
     v.studio.rebuild(resetWeights);
+    // The first point of a match brings the trainer to life — unlock Train/Pause.
+    this.refreshRunButton();
   }
 
-  private vsTick(): void {
+  /**
+   * One animation-frame of live match time. Everything happens concurrently:
+   * the clock runs, the AI saboteur drips points in on its cadence, the AI trainer
+   * retunes on its cadence, and whichever side is a network trains every frame.
+   */
+  private vsTick(dtMs: number): void {
     const v = this.vs;
     if (!v || v.finished) return;
-    v.tick++;
+    v.match.advance(dtMs);
 
-    if (v.match.phase === 'trainer') {
-      if (this.aiIsTrainer()) {
-        if (v.aiStepsLeft > 0) {
-          const n = Math.min(STEPS_PER_FRAME, v.aiStepsLeft);
-          v.studio.step(n);
-          v.aiStepsLeft -= n;
-          this.frame++;
-          this.redrawArena();
-          if (this.frame % TELEMETRY_EVERY === 0) this.refreshTelemetry();
-          if (this.frame % 6 === 0) this.redrawInspector();
-        } else {
-          v.match.endTrainerTurn();
-          this.vsEnterPhase();
-          this.redrawAll();
-        }
-      } else if (this.running && v.studio.trainer) {
-        v.studio.step(STEPS_PER_FRAME);
-        this.frame++;
-        this.redrawArena();
-        if (this.frame % TELEMETRY_EVERY === 0) this.refreshTelemetry();
-        if (this.frame % 6 === 0) this.redrawInspector();
-      }
-    } else if (v.match.phase === 'saboteur') {
-      if (this.aiIsSaboteur()) {
-        // Drop one queued point every few frames for watchability.
-        if (v.tick % 10 === 0 && v.queue.length > 0) {
-          const p = v.queue.shift()!;
-          v.match.addSabotage([p]);
-          v.placedThisTurn++;
-          this.syncVersusData(false);
-          this.redrawArena();
-          this.refreshVsHud();
-        } else if (v.queue.length === 0) {
-          v.match.endSaboteurTurn();
-          this.syncVersusData(false);
-          this.vsEnterPhase();
-          this.redrawAll();
-        }
-      }
+    if (v.match.done) {
+      this.vsFinish();
+      return;
     }
+
+    // --- AI saboteur: one point per cadence interval ---
+    if (this.aiIsSaboteur() && v.match.elapsedMs >= v.nextAiDropAt && v.match.budgetLeft > 0) {
+      const predict = v.studio.net && v.studio.steps > 0 ? v.studio.forward : null;
+      const p = pickSabotagePoint(predict, v.match.points, v.difficulty, v.rng);
+      if (p && v.match.addPoint(p.x, p.y, p.label, true)) {
+        this.syncVersusData(false);
+      }
+      v.nextAiDropAt = v.match.elapsedMs + AI_DROP_INTERVAL[v.difficulty];
+    }
+
+    // --- AI trainer: periodic live retune (warm-keeps weights unless arch changes) ---
+    if (this.aiIsTrainer() && v.match.elapsedMs >= v.nextAiTuneAt) {
+      const plan = liveTrainerPlan(v.match.points.length, v.difficulty, LIVE_RULES.neuronBudget);
+      const archChanged =
+        plan.hidden.join(',') !== v.studio.config.hidden.join(',') ||
+        plan.activation !== v.studio.config.activation;
+      v.studio.config = { ...plan };
+      if (archChanged) {
+        v.studio.reseed();
+        v.studio.rebuild(true);
+      } else {
+        v.studio.rebuild(false);
+      }
+      v.nextAiTuneAt = v.match.elapsedMs + AI_TUNE_INTERVAL;
+    }
+
+    // --- Training: AI trainers always run; a human trainer runs unless paused ---
+    if (v.studio.trainer && (this.aiIsTrainer() || this.running)) {
+      v.studio.step(STEPS_PER_FRAME);
+    }
+
+    this.frame++;
+    this.redrawArena();
+    if (this.frame % TELEMETRY_EVERY === 0) this.refreshTelemetry();
+    if (this.frame % 6 === 0) this.redrawInspector();
   }
 
-  private vsEndTrainerTurn(): void {
+  /** Clock hit zero: freeze the duel and show the verdict. */
+  private vsFinish(): void {
     const v = this.vs;
-    if (!v) return;
+    if (!v || v.finished) return;
+    v.finished = true;
     this.running = false;
-    v.match.endTrainerTurn();
-    this.vsEnterPhase();
-    this.redrawAll();
-  }
-
-  private vsEndSaboteurTurn(): void {
-    const v = this.vs;
-    if (!v) return;
-    v.match.endSaboteurTurn();
-    this.syncVersusData(false);
-    this.vsEnterPhase();
-    this.redrawAll();
+    v.winner = v.studio.net ? v.match.winner(v.studio.forward) : 'trainer';
+    this.renderVersusMatchPanel();
+    this.refreshArenaHeaderVersus();
+    this.refreshVsHud();
+    this.redrawAll(); // also clears the paint cursor now that placement is closed
   }
 
   private renderVersusMatchPanel(): void {
     const v = this.vs;
     if (!v) return this.renderVersusSetup();
 
-    const phase = v.match.phase;
-    const humanTrainer = this.isHumanTrainerTurn();
-    const humanSaboteur = this.isHumanSaboteurTurn();
-
     const children: Node[] = [this.panelHead('duel', 'Versus mode')];
 
-    if (phase === 'done') {
-      const acc = v.match.score(v.studio.forward);
-      const winner = v.match.winner(v.studio.forward);
+    if (v.finished) {
+      const acc = v.studio.net ? v.match.score(v.studio.forward) : 1;
+      const winner = v.winner ?? 'trainer';
+      const forfeit = v.match.points.length < LIVE_RULES.minPoints;
       children.push(
         el('div', { class: `vs-result ${winner}` }, [
           el('div', { class: 'vs-result-tag' }, [winner === 'trainer' ? 'Trainer wins' : 'Saboteur wins']),
-          el('div', { class: 'vs-result-acc' }, [`${(acc * 100).toFixed(1)}% accuracy`]),
+          el('div', { class: 'vs-result-acc' }, [forfeit ? `only ${v.match.points.length} points placed` : `${(acc * 100).toFixed(1)}% accuracy at the bell`]),
           el('div', { class: 'mini-note' }, [
-            winner === 'trainer'
-              ? 'The network had the capacity and tuning to absorb every attack. Nicely defended.'
-              : 'The boundary couldn’t stretch to cover the saboteur’s points — capacity or tuning fell short.',
+            forfeit
+              ? 'Too few points landed to contest the board — the trainer holds it by default.'
+              : winner === 'trainer'
+                ? 'The network kept absorbing every poisoned point in real time. Capacity and tuning held.'
+                : 'The saboteur painted a shape the neuron budget couldn’t bend around before the clock ran out.',
           ]),
         ]),
         el('button', { class: 'btn primary', on: { click: () => { this.vs = null; this.renderVersusSetup(); } } }, ['New match']),
       );
       this.setLeft(children);
-      this.refreshArenaHeaderVersus();
       return;
     }
 
-    if (humanTrainer) {
+    if (this.humanIsTrainer()) {
       children.push(
-        el('div', { class: 'turn-banner trainer' }, [`Your turn — Trainer · Defense ${v.match.attacksDone + 1}`]),
-        this.buildControls({ neuronBudget: VERSUS_RULES.neuronBudget, allowNewData: false }),
-        el('button', { class: 'btn primary wide', on: { click: () => this.vsEndTrainerTurn() } }, ['End turn — let the Saboteur attack ▶']),
+        el('div', { class: 'turn-banner trainer' }, ['LIVE — defend the accuracy line']),
+        el('div', { class: 'mini-note' }, ['The AI is painting hostile points in real time. Retune anything below — training never stops unless you pause it.']),
+        this.buildControls({ neuronBudget: LIVE_RULES.neuronBudget, allowNewData: false }),
       );
-    } else if (humanSaboteur) {
+    } else if (this.humanIsSaboteur()) {
+      const pts = el('div', { class: 'vs-budget' }, [`${v.match.points.length} / ${LIVE_RULES.pointBudget} points placed`]);
+      if (v.hud) v.hud.panelPts = pts;
       children.push(
-        el('div', { class: 'turn-banner saboteur' }, [`Your turn — Saboteur · Attack ${v.match.attackNumber} / ${VERSUS_RULES.rounds}`]),
-        el('div', { class: 'mini-note' }, ['Drop points where the model is confidently **wrong** — a Class A dot deep in an orange region. Click or drag the arena.']),
-        el('div', { class: 'field' }, [el('div', { class: 'field-row' }, [el('span', { class: 'field-label' }, ['Dropping'])]), this.classToggle(v.saboClass, (c) => { v.saboClass = c; this.renderVersusMatchPanel(); })]),
-        el('div', { class: 'vs-budget' }, [`${v.placedThisTurn} / ${VERSUS_RULES.pointsPerRound} points placed`]),
-        el('button', { class: 'btn primary wide', on: { click: () => this.vsEndSaboteurTurn() } }, ['End attack ▶']),
+        el('div', { class: 'turn-banner saboteur' }, ['LIVE — confuse the network']),
+        el('div', { class: 'mini-note' }, ['Click or **drag** on the arena to paint points — any class, anywhere, anytime. The model adapts live, so paint shapes its neuron budget can’t fit (stripes, checkers, islands).']),
+        el('div', { class: 'field' }, [el('div', { class: 'field-row' }, [el('span', { class: 'field-label' }, ['Painting'])]), this.classToggle(v.saboClass, (c) => { v.saboClass = c; this.renderVersusMatchPanel(); })]),
+        pts,
       );
     } else {
-      // AI is acting.
       children.push(
-        el('div', { class: `turn-banner ${phase}` }, [
-          phase === 'trainer' ? 'AI Trainer is building & training…' : 'AI Saboteur is choosing targets…',
-        ]),
-        el('div', { class: 'mini-note' }, ['Watch the arena. ', phase === 'trainer' ? 'The boundary is forming.' : 'New points are landing where the model was wrong.']),
+        el('div', { class: 'turn-banner trainer' }, ['LIVE — AI vs AI']),
+        el('div', { class: 'mini-note' }, ['The Saboteur paints a hostile dataset while the Trainer retunes and trains nonstop. Watch the meter wrestle around the win line.']),
+        el('button', { class: 'btn ghost', on: { click: () => { this.vs = null; this.renderVersus(); } } }, ['Stop · new setup']),
       );
-      if (v.aiVsAi) children.push(el('button', { class: 'btn ghost', on: { click: () => { this.vs = null; this.renderVersusSetup(); } } }, ['Stop · new setup']));
     }
 
     this.setLeft(children);
-    this.refreshArenaHeaderVersus();
     this.refreshRunButton();
   }
 
@@ -1606,58 +1751,92 @@ export class App {
     this.refs.arenaSub.textContent = `versus · ${v.aiVsAi ? 'AI vs AI' : `you are the ${v.humanRole}`} · ${v.difficulty}`;
     this.refs.arenaTitle.textContent = 'Trainer vs Saboteur';
     this.refreshLegend();
-    this.refs.legend.append(legendKey('rgba(255,206,107,0.95)', 'just-placed sabotage'));
+    this.refs.legend.append(legendKey('rgba(255,206,107,0.95)', 'fresh AI drop'));
     this.refreshStatus();
   }
 
-  private refreshVsHud(): void {
+  /** Build the HUD skeleton once per match; refreshVsHud then only patches values. */
+  private buildVsHud(): void {
     const v = this.vs;
-    if (!v) {
-      clear(this.refs.vsHud);
-      return;
-    }
-    const acc = v.studio.net ? v.match.score(v.studio.forward) : 0;
-    const thr = VERSUS_RULES.winThreshold;
-    const pct = Math.max(0, Math.min(100, acc * 100));
-    const hud = this.refs.vsHud;
-    clear(hud);
-    hud.append(
+    if (!v) return;
+    const acc = el('span', { class: 'vs-acc' }, ['—']);
+    const fill = el('div', { class: 'vs-fill' });
+    const timer = el('span', { class: 'vs-timer' }, [fmtClock(LIVE_RULES.durationMs)]);
+    const pts = el('span', { class: 'vs-pts' }, [`${LIVE_RULES.pointBudget} pts`]);
+    clear(this.refs.vsHud);
+    this.refs.vsHud.append(
       el('div', { class: 'vs-meter' }, [
         el('div', { class: 'vs-meter-head' }, [
           el('span', { class: 'vs-side trainer' }, ['Trainer']),
-          el('span', { class: 'vs-acc' }, [`${pct.toFixed(0)}%`]),
+          acc,
           el('span', { class: 'vs-side saboteur' }, ['Saboteur']),
         ]),
         el('div', { class: 'vs-track' }, [
-          el('div', { class: 'vs-fill', style: { width: `${pct}%` } }),
-          el('div', { class: 'vs-threshold', style: { left: `${thr * 100}%` } }),
+          fill,
+          el('div', { class: 'vs-threshold', style: { left: `${LIVE_RULES.winThreshold * 100}%` } }),
         ]),
-        el('div', { class: 'vs-rounds' }, [`${v.match.attacksDone} / ${VERSUS_RULES.rounds} attacks survived · win line ${(thr * 100).toFixed(0)}%`]),
+        el('div', { class: 'vs-rounds' }, [
+          timer,
+          el('span', { class: 'vs-sep' }, ['·']),
+          pts,
+          el('span', { class: 'vs-sep' }, ['·']),
+          el('span', {}, [`win line ${(LIVE_RULES.winThreshold * 100).toFixed(0)}%`]),
+        ]),
       ]),
     );
+    v.hud = { acc, fill, timer, pts, panelPts: null };
+  }
+
+  /** Patch the live HUD in place — no DOM rebuilds, no flicker. */
+  private refreshVsHud(): void {
+    const v = this.vs;
+    if (!v || !v.hud) return;
+    const acc = v.studio.net ? v.match.score(v.studio.forward) : 1;
+    const pct = Math.max(0, Math.min(100, acc * 100));
+    v.hud.acc.textContent = `${pct.toFixed(0)}%`;
+    v.hud.fill.style.width = `${pct}%`;
+    const remaining = v.match.remainingMs;
+    v.hud.timer.textContent = fmtClock(remaining);
+    v.hud.timer.classList.toggle('urgent', remaining <= 15_000 && !v.finished);
+    v.hud.pts.textContent = `${v.match.budgetLeft} pts left`;
+    if (v.hud.panelPts && v.hud.panelPts.isConnected) {
+      v.hud.panelPts.textContent = `${v.match.points.length} / ${LIVE_RULES.pointBudget} points placed`;
+    }
   }
 
   private versusCoachTip(): CoachTip {
     const v = this.vs!;
-    const acc = v.studio.net ? v.match.score(v.studio.forward) : 0;
-    if (v.match.phase === 'done') {
-      const w = v.match.winner(v.studio.forward);
-      return { tone: w === 'trainer' ? 'success' : 'warn', title: w === 'trainer' ? 'Trainer wins' : 'Saboteur wins', body: `Final accuracy ${(acc * 100).toFixed(0)}%.` };
+    const acc = v.studio.net ? v.match.score(v.studio.forward) : 1;
+    if (v.finished) {
+      const w = v.winner ?? 'trainer';
+      return { tone: w === 'trainer' ? 'success' : 'warn', title: w === 'trainer' ? 'Trainer wins' : 'Saboteur wins', body: `Final accuracy ${(acc * 100).toFixed(0)}% against a win line of ${(LIVE_RULES.winThreshold * 100).toFixed(0)}%.` };
     }
-    if (this.isHumanTrainerTurn()) {
-      const txt = trainerHint(v.match, v.studio.config, acc, v.hintLevel);
-      return { tone: acc >= VERSUS_RULES.winThreshold ? 'good' : 'info', title: 'Trainer hint', body: txt || 'Hints are off — you’re on your own. Good luck.' };
+    if (this.humanIsTrainer()) {
+      const txt = liveTrainerHint(v.match, v.studio.config, acc, v.hintLevel);
+      return { tone: acc >= LIVE_RULES.winThreshold ? 'good' : 'info', title: 'Trainer hint', body: txt || 'Hints are off — you’re on your own. Good luck.' };
     }
-    if (this.isHumanSaboteurTurn()) {
-      return { tone: 'info', title: 'Saboteur tip', body: 'Aim for regions the shading is *strongly* one colour but should be the other. Spread your points — clustering is easy for the network to wall off.' };
+    if (this.humanIsSaboteur()) {
+      return {
+        tone: acc < LIVE_RULES.winThreshold ? 'good' : 'info',
+        title: acc < LIVE_RULES.winThreshold ? 'It’s working — keep painting' : 'Saboteur tip',
+        body: 'Structure beats scatter: stripes, checkerboards, and islands of one class inside the other burn through the trainer’s neuron budget fastest. Drag to paint runs of points.',
+      };
     }
-    return { tone: 'idle', title: v.match.phase === 'trainer' ? 'AI Trainer working' : 'AI Saboteur working', body: 'Watch the accuracy meter move as the duel plays out.' };
+    return { tone: 'idle', title: 'AI vs AI', body: 'The Saboteur paints, the Trainer adapts. The meter tells you who’s ahead of the win line.' };
   }
 }
 
 // ===== Small view helpers =================================================
 function legendKey(color: string, label: string): HTMLElement {
   return el('span', { class: 'key' }, [el('span', { class: 'swatch', style: { background: color } }), label]);
+}
+
+/** Format milliseconds as m:ss for the match clock. */
+function fmtClock(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function rule(label: string, value: string): HTMLElement {

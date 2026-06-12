@@ -12,15 +12,29 @@
 
 /* ---- Top bar ------------------------------------------------------------ */
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s5);
   flex-wrap: wrap;
-  padding: var(--s5) var(--s6);
+  padding: var(--s4) var(--s6);
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(14, 20, 34, 0.7), rgba(10, 14, 22, 0.2));
-  backdrop-filter: blur(6px);
+  background: linear-gradient(180deg, rgba(12, 17, 28, 0.92), rgba(10, 14, 22, 0.78));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The brand is a home link — keep it looking like the logo, not an underlined link. */
+a.brand {
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--r2);
+}
+a.brand:hover .brand-title em {
+  text-shadow: 0 0 14px var(--glow-signal);
 }
 
 .brand {
@@ -119,8 +133,8 @@
 }
 .left-panel {
   position: sticky;
-  top: var(--s4);
-  max-height: calc(100vh - var(--s6));
+  top: var(--topbar-h); /* clear the sticky topbar */
+  max-height: calc(100vh - var(--topbar-h) - var(--s4));
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1012,7 +1026,14 @@ select {
 .tut-skip { background: none; border: 0; color: var(--ink-faint); font-size: 12px; cursor: pointer; }
 .tut-skip:hover { color: var(--ink-dim); }
 .tut-nav { display: flex; gap: var(--s2); }
-.tut-btn { flex: 0 0 auto; padding: 9px 16px; min-height: 0; }
+.tut-card .btn,
+.tut-card .btn.primary {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  min-height: 0;
+  font-size: 13px;
+  box-shadow: none;
+}
 
 /* ---- Responsive: stack the panels on narrow screens --------------------- */
 @media (max-width: 1180px) {
@@ -1024,3 +1045,54 @@ select {
   [data-tour='modes'] { display: flex; width: 100%; }
   [data-tour='modes'] .seg-btn { flex: 1 1 0; min-width: 0; padding: 9px 6px; font-size: 11px; letter-spacing: 0.04em; }
 }
+
+/* ============================================================================
+   v3 — live Versus HUD, toast nudge, paint cursor.
+   ========================================================================= */
+
+/* Match clock + points readout inside the HUD strip. */
+.vs-rounds { display: flex; align-items: baseline; justify-content: center; gap: var(--s2); }
+.vs-timer {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.vs-timer.urgent {
+  color: var(--warn);
+  animation: pulse 0.9s infinite;
+}
+.vs-pts { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.vs-sep { color: var(--ink-faint); }
+
+/* The arena invites painting when placement is active. */
+.screen.paintable { cursor: crosshair; }
+
+/* Bottom-right toast (the sandbox → Versus nudge). */
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 45;
+  width: min(340px, calc(100vw - 36px));
+  padding: var(--s4);
+  border-radius: var(--r2);
+  background: var(--bg-3);
+  border: 1px solid rgba(92, 225, 176, 0.35);
+  box-shadow: var(--shadow), 0 0 30px rgba(92, 225, 176, 0.12);
+  animation: toast-in 0.3s both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.toast-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--signal);
+}
+.toast-body { font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; margin: 6px 0 12px; }
+.toast-actions { display: flex; justify-content: flex-end; gap: var(--s2); }
+.toast-btn,
+.toast-actions .btn.primary { flex: 0 0 auto; padding: 8px 14px; min-height: 0; font-size: 13px; box-shadow: none; }
