@@ -143,4 +143,4 @@ typography. Explicit attention to avoiding cramped or awkward layouts.
 Vite build to `dist`, published to GitHub Pages via GitHub Actions
 (`configure-pages` → `upload-pages-artifact` → `deploy-pages`). CI runs typecheck +
 tests before building, so only green builds deploy. `base` = `/neuroforge/`.
-Final URL: `https://pycoder42.github.io/neuroforge/`.
+Final URL: `https://website-and-game-maker.github.io/neuroforge/`.

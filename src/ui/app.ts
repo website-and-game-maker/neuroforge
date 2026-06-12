@@ -357,7 +357,7 @@ export class App {
       el('span', {}, ['NeuroForge — a neural net built from scratch in TypeScript · ']),
       el(
         'a',
-        { attrs: { href: 'https://github.com/PyCoder42/neuroforge', target: '_blank', rel: 'noopener' } },
+        { attrs: { href: 'https://github.com/website-and-game-maker/neuroforge', target: '_blank', rel: 'noopener' } },
         ['source on GitHub'],
       ),
     ]);

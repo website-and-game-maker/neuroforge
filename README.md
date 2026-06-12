@@ -12,7 +12,7 @@ drops, and a live network diagram shows weights strengthening. Beat escalating
 challenges that are really puzzles about *network capacity* (why does XOR need a hidden
 layer? why do two spirals need depth?), or play freely in the sandbox.
 
-🔗 **Live site:** https://pycoder42.github.io/neuroforge/
+🔗 **Live site:** https://website-and-game-maker.github.io/neuroforge/
 
 ## Develop
 

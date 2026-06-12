@@ -48,4 +48,4 @@ npm run build
 2. `npm run test:run` — confirm green.
 3. `npm run dev` — open the printed URL.
 4. Implement per the spec; keep tests green; commit in logical chunks.
-5. Push to `main` to deploy; verify https://pycoder42.github.io/neuroforge/ in a browser.
+5. Push to `main` to deploy; verify https://website-and-game-maker.github.io/neuroforge/ in a browser.
