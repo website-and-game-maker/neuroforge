@@ -61,9 +61,12 @@ export const BCE: Loss = {
     const n = output.data.length;
     const grad = new Float64Array(n);
     for (let i = 0; i < n; i++) {
-      const p = Math.min(1 - EPS, Math.max(EPS, output.data[i]!));
+      const raw = output.data[i]!;
+      // forward() clamps p into [EPS, 1-EPS], so it is locally flat (derivative 0)
+      // outside that window — match that here instead of blowing up at raw=0/1.
+      if (raw <= EPS || raw >= 1 - EPS) continue;
       const t = target.data[i]!;
-      grad[i] = (p - t) / (p * (1 - p)) / n;
+      grad[i] = (raw - t) / (raw * (1 - raw)) / n;
     }
     return new Matrix(output.rows, output.cols, grad);
   },

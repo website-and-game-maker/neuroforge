@@ -85,7 +85,10 @@ function squash(v: number): number {
 function nodeFill(state: InspectorState, col: number, idx: number, isOutput: boolean): string {
   if (!state.probe || !state.probe[col]) return '#0e1422';
   const v = state.probe[col]!.data[idx] ?? 0;
-  const t = isOutput ? Math.max(0, Math.min(1, v)) : squash(v);
+  // Classification output is already a Sigmoid probability in [0,1] — show it raw.
+  // Everything else (hidden neurons, and regression's unbounded output) gets squashed
+  // into [0,1] for display; clamping a regression value raw would flatten its sign.
+  const t = isOutput && state.task === 'classification' ? Math.max(0, Math.min(1, v)) : squash(v);
   const c = mix(CLASS_A, CLASS_B, t);
   return rgba({ ...c, a: 0.92 });
 }

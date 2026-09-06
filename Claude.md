@@ -18,7 +18,7 @@ numerical gradient checking.
 See `docs/superpowers/specs/2026-06-01-neuroforge-design.md` for the full design.
 - `src/engine/` — matrix, rng, activations, layers, losses, network, optimizer, trainer
 - `src/data/` — seeded dataset generators (classification + regression)
-- `src/viz/` — Canvas renderers (boundary, regression curve, points, charts, net diagram)
+- `src/viz/` — Canvas renderers (boundary, regression curve, points, charts, network inspector)
 - `src/game/` — challenge definitions + progress/scoring
 - `src/state/` — localStorage persistence
 - `src/ui/` — app shell + controls (3-zone layout)

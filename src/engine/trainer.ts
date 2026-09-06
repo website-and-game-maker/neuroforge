@@ -87,8 +87,15 @@ export class Trainer {
   }
 }
 
+function requireSameShape(a: Matrix, b: Matrix, op: string): void {
+  if (a.rows !== b.rows || a.cols !== b.cols) {
+    throw new Error(`${op}: pred/target shape mismatch ${a.rows}x${a.cols} vs ${b.rows}x${b.cols}`);
+  }
+}
+
 /** Binary classification accuracy with a 0.5 decision threshold. */
 export function accuracy(pred: Matrix, target: Matrix): number {
+  requireSameShape(pred, target, 'accuracy');
   const n = pred.data.length;
   if (n === 0) return 0;
   let correct = 0;
@@ -101,6 +108,7 @@ export function accuracy(pred: Matrix, target: Matrix): number {
 
 /** Mean squared error metric (for regression readouts). */
 export function mseMetric(pred: Matrix, target: Matrix): number {
+  requireSameShape(pred, target, 'mseMetric');
   const n = pred.data.length;
   if (n === 0) return 0;
   let sum = 0;

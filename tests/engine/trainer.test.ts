@@ -18,6 +18,18 @@ describe('metrics', () => {
     const tgt = Matrix.fromRows([[1], [0]]);
     expect(mseMetric(pred, tgt)).toBeCloseTo(2.0, 12);
   });
+
+  it('accuracy throws on a pred/target shape mismatch instead of computing garbage', () => {
+    const pred = Matrix.fromRows([[0.9], [0.2], [0.6]]);
+    const tgt = Matrix.fromRows([[1], [0]]);
+    expect(() => accuracy(pred, tgt)).toThrow(/shape mismatch/);
+  });
+
+  it('mseMetric throws on a pred/target shape mismatch instead of computing garbage', () => {
+    const pred = Matrix.fromRows([[1], [2], [3]]);
+    const tgt = Matrix.fromRows([[1], [0]]);
+    expect(() => mseMetric(pred, tgt)).toThrow(/shape mismatch/);
+  });
 });
 
 // Clustered XOR: four gaussian blobs at (±0.5, ±0.5); same-sign → 0, opposite → 1.
