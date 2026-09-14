@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Matrix, matmul, addRowVector } from '../../src/engine/matrix';
 import { Dense, ActivationLayer } from '../../src/engine/layers';
-import { Tanh } from '../../src/engine/activations';
+import { ReLU, Tanh, Sigmoid, Identity, type Activation } from '../../src/engine/activations';
 import { Rng } from '../../src/engine/rng';
 import { numericalGradient, maxRelError, dot } from '../helpers/gradcheck';
 
@@ -50,19 +50,25 @@ describe('Dense backward — gradient check', () => {
 });
 
 describe('ActivationLayer backward — gradient check', () => {
-  it('Tanh dX matches finite differences', () => {
-    const act = new ActivationLayer(Tanh);
-    const X = Matrix.fromRows([[0.5, -1.0, 2.0, 0.1]]);
-    const G = Matrix.fromRows([[0.3, 0.7, -0.2, 1.0]]);
-    const lossAt = (): number => dot(act.forward(X).data, G.data);
+  // Points kept away from 0 so ReLU's kink (non-differentiable at x=0) never lands
+  // inside a finite-difference step.
+  const X = Matrix.fromRows([[0.5, -1.0, 2.0, 0.1]]);
+  const G = Matrix.fromRows([[0.3, 0.7, -0.2, 1.0]]);
 
-    act.forward(X);
-    const dX = act.backward(G);
-    const numX = numericalGradient(lossAt, X.data);
+  const activations: Activation[] = [ReLU, Tanh, Sigmoid, Identity];
+  for (const activation of activations) {
+    it(`${activation.name} dX matches finite differences`, () => {
+      const act = new ActivationLayer(activation);
+      const lossAt = (): number => dot(act.forward(X).data, G.data);
 
-    expect(maxRelError(dX.data, numX)).toBeLessThan(1e-5);
-    expect(act.params()).toEqual([]);
-  });
+      act.forward(X);
+      const dX = act.backward(G);
+      const numX = numericalGradient(lossAt, X.data);
+
+      expect(maxRelError(dX.data, numX)).toBeLessThan(1e-5);
+      expect(act.params()).toEqual([]);
+    });
+  }
 });
 
 describe('Dense params', () => {

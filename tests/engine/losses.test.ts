@@ -41,4 +41,16 @@ describe('BCE', () => {
     const tgt = Matrix.fromRows([[1], [0]]); // worst case
     expect(Number.isFinite(BCE.forward(out, tgt))).toBe(true);
   });
+
+  it('backward matches finite differences at saturated predictions (0/1)', () => {
+    // forward() clamps p into [EPS, 1-EPS], which is locally flat right at the
+    // saturation points — the true gradient there is 0, not the huge value you'd
+    // get from plugging the clamped p into the unclamped derivative formula.
+    const out = Matrix.fromRows([[0], [1], [0], [1]]);
+    const tgt = Matrix.fromRows([[1], [0], [0], [1]]);
+    const analytic = BCE.backward(out, tgt);
+    // eps small enough that both perturbed points still clamp to the same value.
+    const numeric = numericalGradient(() => BCE.forward(out, tgt), out.data, 1e-9);
+    expect(maxRelError(analytic.data, numeric)).toBeLessThan(1e-4);
+  });
 });

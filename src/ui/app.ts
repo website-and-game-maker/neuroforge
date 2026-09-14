@@ -193,7 +193,11 @@ export class App {
 
     const help = el(
       'button',
-      { class: 'icon-btn', attrs: { title: 'Replay the tour' }, on: { click: () => new Tutorial(TUTORIAL).start() } },
+      {
+        class: 'icon-btn',
+        attrs: { title: 'Replay the tour', 'aria-label': 'Replay the tour' },
+        on: { click: () => new Tutorial(TUTORIAL).start() },
+      },
       ['?'],
     );
     const concepts = el(
@@ -266,8 +270,15 @@ export class App {
 
     const screen = el('div', { class: 'screen', dataset: { tour: 'arena' } }, [arenaCanvas, solvedFlag]);
     arenaCanvas.addEventListener('pointermove', (e) => this.onArenaPointer(e, 'move'));
-    arenaCanvas.addEventListener('pointerdown', (e) => this.onArenaPointer(e, 'down'));
+    arenaCanvas.addEventListener('pointerdown', (e) => {
+      // Capture so a fast drag that leaves the canvas before releasing still delivers
+      // pointerup here — without this, `painting` can get stuck true and stray
+      // pointermoves keep placing points.
+      arenaCanvas.setPointerCapture(e.pointerId);
+      this.onArenaPointer(e, 'down');
+    });
     arenaCanvas.addEventListener('pointerup', () => (this.painting = false));
+    arenaCanvas.addEventListener('pointercancel', () => (this.painting = false));
     arenaCanvas.addEventListener('pointerleave', () => {
       this.painting = false;
       this.probe = null;
@@ -607,9 +618,33 @@ export class App {
       label,
       slider,
       el('div', { class: 'chip-controls' }, [
-        el('button', { class: 'chip-btn', on: { click: () => this.changeWidth(idx, -1) } }, ['−']),
-        el('button', { class: 'chip-btn', on: { click: () => this.changeWidth(idx, +1) } }, ['+']),
-        el('button', { class: 'chip-remove', on: { click: () => this.removeLayer(idx) } }, ['✕']),
+        el(
+          'button',
+          {
+            class: 'chip-btn',
+            attrs: { 'aria-label': 'Decrease layer width' },
+            on: { click: () => this.changeWidth(idx, -1) },
+          },
+          ['−'],
+        ),
+        el(
+          'button',
+          {
+            class: 'chip-btn',
+            attrs: { 'aria-label': 'Increase layer width' },
+            on: { click: () => this.changeWidth(idx, +1) },
+          },
+          ['+'],
+        ),
+        el(
+          'button',
+          {
+            class: 'chip-remove',
+            attrs: { 'aria-label': 'Remove layer' },
+            on: { click: () => this.removeLayer(idx) },
+          },
+          ['✕'],
+        ),
       ]),
     ]);
   }
@@ -1482,7 +1517,11 @@ export class App {
       el('div', { class: 'modal' }, [
         el('div', { class: 'modal-head' }, [
           el('h2', {}, ['Concepts']),
-          el('button', { class: 'icon-btn', on: { click: () => overlay.remove() } }, ['✕']),
+          el(
+            'button',
+            { class: 'icon-btn', attrs: { 'aria-label': 'Close' }, on: { click: () => overlay.remove() } },
+            ['✕'],
+          ),
         ]),
         list,
       ]),
