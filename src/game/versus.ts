@@ -232,17 +232,17 @@ export function liveTrainerPlan(
   budget: number,
 ): StudioConfig {
   if (skill === 'easy') {
-    return { hidden: [Math.min(budget, 6)], activation: 'tanh', lr: 0.08, l2: 0, batchSize: 16, momentum: 0.9 };
+    return { hidden: [Math.min(budget, 6)], activation: 'tanh', lr: 0.08, l2: 0, batchSize: 16, momentum: 0.9, optimizer: 'sgd' };
   }
   if (skill === 'medium') {
     const w = Math.min(budget, 8 + Math.floor(pointCount / 12));
-    return { hidden: [w], activation: 'tanh', lr: 0.12, l2: 0, batchSize: 16, momentum: 0.9 };
+    return { hidden: [w], activation: 'tanh', lr: 0.12, l2: 0, batchSize: 16, momentum: 0.9, optimizer: 'sgd' };
   }
   // hard: spend the budget across two ReLU layers, growing with the data.
   const total = Math.min(budget, 12 + Math.floor(pointCount / 10));
   const a = Math.max(2, Math.round(total * 0.6));
   const b = Math.max(2, total - a);
-  return { hidden: [a, b], activation: 'relu', lr: 0.06, l2: 0, batchSize: 16, momentum: 0.9 };
+  return { hidden: [a, b], activation: 'relu', lr: 0.06, l2: 0, batchSize: 16, momentum: 0.9, optimizer: 'sgd' };
 }
 
 /* ===========================================================================

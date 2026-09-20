@@ -33,6 +33,7 @@ describe('every challenge is solvable with its starter config', () => {
         {
           lr: ch.starter.lr,
           momentum: ch.starter.momentum,
+          optimizer: ch.starter.optimizer,
           l2: ch.starter.l2,
           batchSize: ch.starter.batchSize,
         },

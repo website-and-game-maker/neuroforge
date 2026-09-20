@@ -3,6 +3,7 @@ import { activationByName, Sigmoid, Identity } from '../engine/activations';
 import { BCE, MSE, type Loss } from '../engine/losses';
 import { Rng } from '../engine/rng';
 import { Trainer, accuracy, mseMetric } from '../engine/trainer';
+import { OPTIMIZER_NAMES, type OptimizerName } from '../engine/optimizer';
 import { Matrix } from '../engine/matrix';
 import type { Dataset, TaskKind } from '../data/datasets';
 
@@ -14,7 +15,56 @@ export interface StudioConfig {
   l2: number;
   batchSize: number;
   momentum: number;
+  optimizer: OptimizerName;
 }
+
+/**
+ * Presentation facts about each update rule: what to call it, whether the Momentum
+ * slider applies, and the learning-rate range that actually behaves for it. Adam
+ * normalises its step by the gradient's own scale, so its useful lr band sits about an
+ * order of magnitude below SGD's — showing both on one slider would make one of them
+ * feel broken.
+ */
+export interface OptimizerInfo {
+  name: OptimizerName;
+  label: string;
+  usesMomentum: boolean;
+  defaultLr: number;
+  lrMin: number;
+  lrMax: number;
+  lrStep: number;
+  /** One-line "why you'd pick this", shown under the selector. */
+  blurb: string;
+}
+
+export const OPTIMIZER_INFO: Record<OptimizerName, OptimizerInfo> = {
+  sgd: {
+    name: 'sgd',
+    label: 'SGD + momentum',
+    usesMomentum: true,
+    defaultLr: 0.2,
+    lrMin: 0.005,
+    lrMax: 0.6,
+    lrStep: 0.005,
+    blurb: 'One step size for every weight. Simple, and the learning rate matters a lot.',
+  },
+  adam: {
+    name: 'adam',
+    label: 'Adam',
+    usesMomentum: false,
+    defaultLr: 0.03,
+    lrMin: 0.001,
+    lrMax: 0.2,
+    lrStep: 0.001,
+    blurb: 'Adapts the step size per weight. Usually trains faster and forgives a badly tuned lr.',
+  },
+};
+
+export function optimizerInfo(name: string): OptimizerInfo {
+  return OPTIMIZER_INFO[name as OptimizerName] ?? OPTIMIZER_INFO.sgd;
+}
+
+export { OPTIMIZER_NAMES, type OptimizerName };
 
 export interface StudioMetrics {
   task: TaskKind;
@@ -27,7 +77,7 @@ export interface StudioMetrics {
 }
 
 export function defaultConfig(): StudioConfig {
-  return { hidden: [8], activation: 'tanh', lr: 0.2, l2: 0, batchSize: 16, momentum: 0.9 };
+  return { hidden: [8], activation: 'tanh', lr: 0.2, l2: 0, batchSize: 16, momentum: 0.9, optimizer: 'sgd' };
 }
 
 /**
@@ -94,6 +144,7 @@ export class Studio {
         {
           lr: this.config.lr,
           momentum: this.config.momentum,
+          optimizer: this.config.optimizer,
           l2: this.config.l2,
           batchSize: this.config.batchSize,
         },

@@ -13,6 +13,29 @@ describe('richInline', () => {
     expect(nodes[3]!.textContent).toBe('c');
   });
 
+  it('parses *italic* into <em>, and lets **bold** win on the same asterisks', () => {
+    const nodes = richInline('plain *lean* and **loud**');
+    expect((nodes[1] as HTMLElement).tagName).toBe('EM');
+    expect(nodes[1]!.textContent).toBe('lean');
+    expect((nodes[3] as HTMLElement).tagName).toBe('STRONG');
+    expect(nodes[3]!.textContent).toBe('loud');
+  });
+
+  it('leaves stray asterisks alone rather than italicising across them', () => {
+    for (const text of ['3 * 4 * 5', 'a lone * asterisk', '2*3']) {
+      const nodes = richInline(text);
+      expect(nodes.length).toBe(1);
+      expect(nodes[0]!.nodeType).toBe(3); // a single text node — nothing was marked up
+      expect(nodes[0]!.textContent).toBe(text);
+    }
+  });
+
+  it('renders multi-word italics spanning punctuation', () => {
+    const nodes = richInline('the *boundary, not the dots* here');
+    expect((nodes[1] as HTMLElement).tagName).toBe('EM');
+    expect(nodes[1]!.textContent).toBe('boundary, not the dots');
+  });
+
   it('never interprets content as HTML', () => {
     const nodes = richInline('<img src=x onerror=alert(1)> **safe**');
     const text = nodes.map((n) => n.textContent).join('');

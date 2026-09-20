@@ -72,10 +72,16 @@ export function coach(input: CoachInput): CoachTip {
 
   // --- Diverging: the single most common beginner failure. ---
   if (trend === 'rising' || !Number.isFinite(input.lossHistory[input.lossHistory.length - 1]!)) {
+    // Momentum is an SGD-only knob, so don't send Adam players looking for a slider
+    // that isn't on screen.
+    const alsoTry =
+      config.optimizer === 'adam'
+        ? 'or raise the batch size for a steadier gradient'
+        : 'or reduce momentum';
     return {
       tone: 'warn',
       title: 'Learning rate too high',
-      body: `The loss is climbing instead of falling — the optimizer is overshooting. Lower the learning rate (try ${(config.lr / 2).toFixed(3)}) or reduce momentum, then Reset and train again.`,
+      body: `The loss is climbing instead of falling — the optimizer is overshooting. Lower the learning rate (try ${(config.lr / 2).toFixed(3)}) ${alsoTry}, then Reset and train again.`,
     };
   }
 
@@ -115,10 +121,19 @@ export function coach(input: CoachInput): CoachTip {
           body: `Accuracy stalled at ${(acc * 100).toFixed(0)}%. The boundary can’t bend sharply enough. Widen a layer (more neurons) or add another — each neuron adds one more crease the boundary can use.`,
         };
       }
+      // With capacity to spare, a plateau is a descent problem, not a model problem —
+      // and swapping the update rule is the biggest lever left.
+      if (config.optimizer !== 'adam') {
+        return {
+          tone: 'info',
+          title: 'Plenty of neurons — change how it steps',
+          body: `You have capacity (${neurons} neurons) but it’s plateaued at ${(acc * 100).toFixed(0)}%. SGD moves every weight by the same step size, and some of them need a different one. Switch **Optimizer** to **Adam** (it picks a step size per weight), or raise the learning rate a little and try ReLU for sharper creases.`,
+        };
+      }
       return {
         tone: 'info',
         title: 'Plenty of neurons — help it learn',
-        body: `You have capacity (${neurons} neurons) but it’s plateaued at ${(acc * 100).toFixed(0)}%. Raise the learning rate a little, add momentum, or switch the activation (ReLU carves sharp creases; tanh makes smooth bends).`,
+        body: `You have capacity (${neurons} neurons) but it’s plateaued at ${(acc * 100).toFixed(0)}%. Nudge the learning rate, or switch the activation (ReLU carves sharp creases; tanh makes smooth bends).`,
       };
     }
     return {

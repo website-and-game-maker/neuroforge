@@ -1,25 +1,27 @@
 /**
  * Render the light inline markup used in curriculum/coach content into real DOM nodes
- * (no innerHTML, so content is never interpreted as HTML). Supports **bold** and `code`.
+ * (no innerHTML, so content is never interpreted as HTML). Supports **bold**, *italic*
+ * and `code`.
  */
 export function richInline(text: string): Node[] {
   const out: Node[] = [];
-  // Split on **bold** and `code`, keeping the delimiters' captured groups.
-  const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  // Split on **bold**, *italic* and `code`, keeping the delimiters' captured groups.
+  // **bold** is listed first so it wins over *italic* on the same asterisks; the italic
+  // body may not begin or end with whitespace, so prose like "3 * 4 * 5" stays literal.
+  const re = /\*\*([^*]+)\*\*|\*(\S|\S[^*]*\S)\*|`([^`]+)`/g;
+  const wrap = (tag: 'strong' | 'em' | 'code', content: string, className?: string): void => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    node.textContent = content;
+    out.push(node);
+  };
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
-    if (m[1] !== undefined) {
-      const strong = document.createElement('strong');
-      strong.textContent = m[1];
-      out.push(strong);
-    } else if (m[2] !== undefined) {
-      const code = document.createElement('code');
-      code.className = 'inl-code';
-      code.textContent = m[2];
-      out.push(code);
-    }
+    if (m[1] !== undefined) wrap('strong', m[1]);
+    else if (m[2] !== undefined) wrap('em', m[2]);
+    else if (m[3] !== undefined) wrap('code', m[3], 'inl-code');
     last = re.lastIndex;
   }
   if (last < text.length) out.push(document.createTextNode(text.slice(last)));
