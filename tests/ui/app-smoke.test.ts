@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll } from 'vitest';
 import { App } from '../../src/ui/app';
+import type { StudioConfig } from '../../src/ui/studio';
 
 /** A no-op 2D context so the canvas renderers run in jsdom without a real canvas. */
 function stubCanvas(): void {
@@ -160,6 +161,51 @@ describe('App integration (jsdom)', () => {
     expect(anyApp.vs!.match.done).toBe(true);
     expect(['trainer', 'saboteur']).toContain(anyApp.vs!.winner);
     expect(anyApp.vs!.match.points.length).toBeGreaterThan(10);
+  });
+
+  it('switches optimizer from the panel, snapping the learning rate and hiding Momentum', () => {
+    const { app, root } = mountApp();
+    clickMode(root, 'Sandbox');
+    const anyApp = app as never as { studio: { config: StudioConfig }; stepOnce(): void };
+
+    const labels = (): string[] =>
+      Array.from(root.querySelectorAll('.field-label')).map((n) => n.textContent ?? '');
+    const optimizerSelect = (): HTMLSelectElement => {
+      const sel = root.querySelector<HTMLSelectElement>('select[aria-label="Optimizer"]');
+      if (!sel) throw new Error('optimizer select not found');
+      return sel;
+    };
+
+    expect(anyApp.studio.config.optimizer).toBe('sgd');
+    expect(labels()).toContain('Momentum');
+
+    optimizerSelect().value = 'adam';
+    optimizerSelect().dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(anyApp.studio.config.optimizer).toBe('adam');
+    // The lr was still SGD's untouched default, so it snaps to Adam's.
+    expect(anyApp.studio.config.lr).toBeCloseTo(0.03, 12);
+    expect(labels()).not.toContain('Momentum');
+    expect(() => anyApp.stepOnce()).not.toThrow();
+
+    // ...and back, restoring the SGD-only control.
+    optimizerSelect().value = 'sgd';
+    optimizerSelect().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(anyApp.studio.config.optimizer).toBe('sgd');
+    expect(anyApp.studio.config.lr).toBeCloseTo(0.2, 12);
+    expect(labels()).toContain('Momentum');
+  });
+
+  it('keeps a learning rate the player deliberately chose, when the new optimizer can use it', () => {
+    const { app, root } = mountApp();
+    clickMode(root, 'Sandbox');
+    const anyApp = app as never as { studio: { config: StudioConfig; setConfig(p: Partial<StudioConfig>): void } };
+    anyApp.studio.setConfig({ lr: 0.05 }); // inside both bands, and not either default
+
+    const sel = root.querySelector<HTMLSelectElement>('select[aria-label="Optimizer"]')!;
+    sel.value = 'adam';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(anyApp.studio.config.lr).toBeCloseTo(0.05, 12);
   });
 
   it('routes modes to named paths and back', () => {

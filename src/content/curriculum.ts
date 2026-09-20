@@ -4,7 +4,7 @@ import type { Target } from '../game/challenges';
 
 /* ===========================================================================
    Instructional content. Pure data — no DOM, no engine. Rendered by the views.
-   Light markup supported by the renderer: **bold**, and `code`.
+   Light markup supported by the renderer: **bold**, *italic*, and `code`.
    ========================================================================= */
 
 /** A single guided lesson in Learn mode: it configures the playground, then teaches. */
@@ -32,7 +32,16 @@ const C = (
   activation: string,
   lr: number,
   extra: Partial<StudioConfig> = {},
-): StudioConfig => ({ hidden, activation, lr, l2: 0, batchSize: 16, momentum: 0.9, ...extra });
+): StudioConfig => ({
+  hidden,
+  activation,
+  lr,
+  l2: 0,
+  batchSize: 16,
+  momentum: 0.9,
+  optimizer: 'sgd',
+  ...extra,
+});
 
 export const LESSONS: Lesson[] = [
   {
@@ -121,6 +130,25 @@ export const LESSONS: Lesson[] = [
       'Train at the low rate (0.05) and notice how slowly the loss falls. Now drag **Learning rate** up high (past 0.4), Reset, Train, and watch it destabilize. Settle on a rate in between.',
     reflect:
       'You changed nothing about the network — same neurons, same data. Only the step size. That alone is the difference between “learns fast” and “never learns”.',
+  },
+  {
+    id: 'l-optimizer',
+    title: 'The optimizer: how each step is chosen',
+    bigIdea: 'The learning rate says how far to step. The optimizer decides how that distance is spent.',
+    body: [
+      'So far every weight in the network has moved by the same rule: **step size × its gradient**. That’s **SGD**. It works, but it forces one step size to suit thousands of weights at once — and different weights want wildly different step sizes. A weight deep in the network with tiny gradients crawls, while one with big gradients is already overshooting.',
+      '**Adam** fixes that by tracking two running averages per weight: the average *gradient* (the same “keep going that way” idea as **momentum**) and the average *squared* gradient — how big that weight’s gradients have been lately. It then divides the step by the square root of the second one. Loud weights get reined in, quiet weights get amplified, and every weight ends up moving at a useful pace.',
+      'Because the step is normalized by the gradient’s own size, Adam’s step length is roughly the learning rate itself — which is why its useful range sits about ten times lower than SGD’s. Switching optimizers moves the slider for you.',
+      'The catch: Adam getting there fast isn’t the same as getting somewhere better. On easy data both land in the same place, and Adam only earns its keep when the problem is hard or badly scaled — like these spirals.',
+    ],
+    task: 'classification',
+    dataset: 'spirals',
+    config: C([32, 32], 'relu', 0.05),
+    doThis:
+      'Train on **SGD** and count how long the spiral arms take to separate. Now switch **Optimizer** to **Adam**, press Reset, and train again — same network, same data, same number of steps.',
+    check: { kind: 'accuracy', min: 0.95 },
+    reflect:
+      'Same architecture, same gradients, same loss — only the rule that turns gradients into steps changed. Optimizers don’t make a network smarter; they make the descent less dependent on you guessing one number correctly.',
   },
   {
     id: 'l-overfit',
@@ -213,6 +241,16 @@ export const CONCEPTS: Concept[] = [
     term: 'L2 (weight decay)',
     short: 'Gently pulls weights toward zero.',
     long: 'A regularizer that discourages over-complex boundaries, trading a little training accuracy for better generalization to unseen points.',
+  },
+  {
+    term: 'Optimizer',
+    short: 'The rule that turns gradients into weight updates.',
+    long: 'Backprop says which way each weight should move; the optimizer decides how far. SGD uses one step size for every weight; Adam gives each weight its own, scaled by that weight’s recent gradient size.',
+  },
+  {
+    term: 'Adam',
+    short: 'Per-weight adaptive step sizes.',
+    long: 'Tracks a running average of each weight’s gradient (like momentum) and of its squared gradient, then divides the step by the square root of the second. Weights with big gradients take smaller steps, quiet weights take bigger ones. Its steps are already normalized, so it wants a much smaller learning rate than SGD.',
   },
   {
     term: 'Batch size',

@@ -1,7 +1,7 @@
 import { Matrix } from './matrix';
 import type { Network } from './network';
 import type { Loss } from './losses';
-import { SGD } from './optimizer';
+import { createOptimizer, type Optimizer } from './optimizer';
 import type { Rng } from './rng';
 
 export interface TrainConfig {
@@ -9,6 +9,8 @@ export interface TrainConfig {
   momentum: number;
   l2: number;
   batchSize: number;
+  /** Update rule; defaults to `'sgd'` (momentum is ignored by the others). */
+  optimizer?: string;
 }
 
 /** Gather a subset of rows from `m` into a new matrix (used to build minibatches). */
@@ -22,9 +24,10 @@ function gatherRows(m: Matrix, idx: number[]): Matrix {
 }
 
 /**
- * Drives minibatch SGD over a fixed dataset. Training is *steppable*: the UI calls
- * `step(k)` once per animation frame so the page never blocks. An epoch's worth of
- * shuffled indices is consumed batch by batch, reshuffling when exhausted.
+ * Drives minibatch training over a fixed dataset with the configured optimizer.
+ * Training is *steppable*: the UI calls `step(k)` once per animation frame so the page
+ * never blocks. An epoch's worth of shuffled indices is consumed batch by batch,
+ * reshuffling when exhausted.
  */
 /** Cap the retained loss history so a long training run can't grow memory without bound
  *  (the chart only ever needs a recent window). Trimming is deterministic, so identical
@@ -36,7 +39,7 @@ export class Trainer {
   readonly lossHistory: number[] = [];
   stepCount = 0;
 
-  private readonly opt: SGD;
+  private readonly opt: Optimizer;
   private readonly batchSize: number;
   private readonly indices: number[];
   private cursor = 0;
@@ -49,7 +52,11 @@ export class Trainer {
     cfg: TrainConfig,
     private readonly rng: Rng,
   ) {
-    this.opt = new SGD(cfg.lr, cfg.momentum, cfg.l2);
+    this.opt = createOptimizer(cfg.optimizer ?? 'sgd', {
+      lr: cfg.lr,
+      momentum: cfg.momentum,
+      l2: cfg.l2,
+    });
     this.batchSize = Math.max(1, Math.min(cfg.batchSize, X.rows));
     this.indices = Array.from({ length: X.rows }, (_, i) => i);
     this.rng.shuffleInPlace(this.indices);

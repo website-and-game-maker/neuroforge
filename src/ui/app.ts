@@ -27,7 +27,14 @@ import {
   type InspectorLayout,
   type NeuronRef,
 } from '../viz/inspector';
-import { Studio, defaultConfig, type StudioConfig } from './studio';
+import {
+  Studio,
+  defaultConfig,
+  optimizerInfo,
+  OPTIMIZER_NAMES,
+  type StudioConfig,
+  type OptimizerName,
+} from './studio';
 import { coach, type CoachTip } from '../game/coach';
 import { LESSONS, CONCEPTS, ioExplainer, TUTORIAL } from '../content/curriculum';
 import {
@@ -497,10 +504,20 @@ export class App {
       }, (a) => a.toUpperCase()),
     ]);
 
+    const opt = optimizerInfo(this.studioConfig().optimizer);
     const hyper = el('div', { class: 'group' }, [
       el('div', { class: 'group-label' }, ['Hyperparameters']),
-      this.buildSlider('Learning rate', 'lr', 0.005, 0.6, 0.005, (v) => v.toFixed(3)),
-      this.buildSlider('Momentum', 'momentum', 0, 0.95, 0.05, (v) => v.toFixed(2)),
+      this.buildSelectField(
+        'Optimizer',
+        [...OPTIMIZER_NAMES],
+        opt.name,
+        (v) => this.setOptimizer(v),
+        (v) => optimizerInfo(v).label,
+      ),
+      el('p', { class: 'field-note' }, [opt.blurb]),
+      this.buildSlider('Learning rate', 'lr', opt.lrMin, opt.lrMax, opt.lrStep, (v) => v.toFixed(3)),
+      opt.usesMomentum &&
+        this.buildSlider('Momentum', 'momentum', 0, 0.95, 0.05, (v) => v.toFixed(2)),
       this.buildSlider('L2 (weight decay)', 'l2', 0, 0.02, 0.0005, (v) => v.toFixed(4)),
       this.buildSelectField('Batch size', ['4', '8', '16', '32', '64'], String(this.studioConfig().batchSize), (v) => {
         this.current().setConfig({ batchSize: Number(v) });
@@ -902,6 +919,28 @@ export class App {
   }
 
   // ===== Engine actions ==================================================
+  /**
+   * Switch update rule. Each optimizer has its own sane learning-rate band (Adam's is
+   * ~10x lower), so carrying the old lr across would make the new one look broken.
+   * Snap to the new default unless the player had *deliberately* set an lr that the
+   * incoming optimizer can also use — a value they never touched carries no intent.
+   */
+  private setOptimizer(name: string): void {
+    const next = optimizerInfo(name);
+    const cur = this.studioConfig();
+    if (cur.optimizer === next.name) return;
+    const untouched = cur.lr === optimizerInfo(cur.optimizer).defaultLr;
+    const inNewRange = cur.lr >= next.lrMin && cur.lr <= next.lrMax;
+    this.current().setConfig({
+      optimizer: next.name as OptimizerName,
+      lr: !untouched && inNewRange ? cur.lr : next.defaultLr,
+    });
+    // A different rule means different optimizer state (velocity / moments), so this is
+    // a fresh trainer either way; rerender because the visible sliders change with it.
+    this.applyChange(false);
+    this.rerenderLeft();
+  }
+
   private applyChange(structural: boolean): void {
     // In a live Versus match the duel keeps running while you retune — pausing on
     // every tweak would fight the real-time format. Everywhere else, pause.

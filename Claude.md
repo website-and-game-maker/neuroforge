@@ -16,7 +16,7 @@ numerical gradient checking.
 ## Layout
 
 See `docs/superpowers/specs/2026-06-01-neuroforge-design.md` for the full design.
-- `src/engine/` — matrix, rng, activations, layers, losses, network, optimizer, trainer
+- `src/engine/` — matrix, rng, activations, layers, losses, network, optimizers (SGD, Adam), trainer
 - `src/data/` — seeded dataset generators (classification + regression)
 - `src/viz/` — Canvas renderers (boundary, regression curve, points, charts, network inspector)
 - `src/game/` — challenge definitions + progress/scoring
@@ -36,6 +36,10 @@ npm run build
 ## Conventions / constraints
 
 - **No ML or math libraries** — the engine is hand-written on purpose.
+- Optimizers implement the `Optimizer` interface and are constructed by name through
+  `createOptimizer`; per-parameter state is keyed on the parameter's stable `value`
+  Matrix identity. Adding one means: the class, a `OPTIMIZER_NAMES` entry, and an
+  `OPTIMIZER_INFO` row in `src/ui/studio.ts` (label, lr band, momentum applicability).
 - Engine functions are pure and total where possible; the engine has no DOM imports.
 - Every layer/loss gradient must have a numerical gradient-check test.
 - Training is *steppable* (driven by requestAnimationFrame) so the UI never blocks.

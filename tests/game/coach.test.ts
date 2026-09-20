@@ -9,6 +9,7 @@ const cfg = (hidden: number[], lr = 0.1): StudioConfig => ({
   l2: 0,
   batchSize: 16,
   momentum: 0.9,
+  optimizer: 'sgd',
 });
 
 const flat = (v: number, n = 60): number[] => Array.from({ length: n }, () => v);
@@ -59,6 +60,32 @@ describe('coach', () => {
     });
     expect(tip.tone).toBe('good');
     expect(tip.title.toLowerCase()).toContain('overfit');
+  });
+
+  it('suggests Adam when capacity is ample but SGD has plateaued', () => {
+    const tip = coach({ ...base, config: cfg([32, 32]), trainScore: 0.7 });
+    expect(tip.body).toContain('Adam');
+  });
+
+  it('does not suggest Adam to someone already on Adam', () => {
+    const tip = coach({
+      ...base,
+      config: { ...cfg([32, 32]), optimizer: 'adam' },
+      trainScore: 0.7,
+    });
+    expect(tip.body).not.toContain('Adam');
+  });
+
+  it('does not tell an Adam player to reduce momentum (there is no such slider)', () => {
+    const sgdTip = coach({ ...base, lossHistory: rising() });
+    expect(sgdTip.body).toContain('momentum');
+    const adamTip = coach({
+      ...base,
+      config: { ...cfg([8]), optimizer: 'adam' },
+      lossHistory: rising(),
+    });
+    expect(adamTip.title.toLowerCase()).toContain('learning rate');
+    expect(adamTip.body).not.toContain('momentum');
   });
 
   it('handles regression: a line cannot bend', () => {
