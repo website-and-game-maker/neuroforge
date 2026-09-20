@@ -144,6 +144,13 @@ describe('App integration (jsdom)', () => {
     expect(anyApp.vs!.match.budgetLeft).toBeLessThan(60);
   });
 
+  // Simulates a full 120-second match at 100ms ticks: ~1200 iterations, each training
+  // a live network in jsdom. It runs in ~4s locally, which left almost no headroom under
+  // vitest's 5s default — a loaded CI runner tipped it over at 5034ms. The budget below
+  // absorbs that variance while still bounding a genuine hang. Nothing else is relaxed:
+  // every tick and every assertion below still runs.
+  const VS_MATCH_TIMEOUT_MS = 30_000;
+
   it('runs an AI-vs-AI live match to the final bell and declares a winner', () => {
     const { app, root } = mountApp();
     clickMode(root, 'Versus');
@@ -161,7 +168,7 @@ describe('App integration (jsdom)', () => {
     expect(anyApp.vs!.match.done).toBe(true);
     expect(['trainer', 'saboteur']).toContain(anyApp.vs!.winner);
     expect(anyApp.vs!.match.points.length).toBeGreaterThan(10);
-  });
+  }, VS_MATCH_TIMEOUT_MS);
 
   it('switches optimizer from the panel, snapping the learning rate and hiding Momentum', () => {
     const { app, root } = mountApp();
